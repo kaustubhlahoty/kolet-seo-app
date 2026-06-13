@@ -1,0 +1,371 @@
+"use client";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useRouter, useParams } from "next/navigation";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2 } from "lucide-react";
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+const stripNbsp = (s: string) => s.replace(/&nbsp;/g, " ").replace(/  +/g, " ").trim();
+
+/** Strip author block and "Articles liés" from content body. */
+function cleanContent(c: string): string {
+  const cutpoints = [
+    /^---\s*\n## À propos de l'auteur/m,
+    /^## À propos de l'auteur/m,
+    /^## Articles liés/m,
+  ];
+  let end = c.length;
+  for (const re of cutpoints) {
+    const m = c.search(re);
+    if (m !== -1 && m < end) end = m;
+  }
+  return c.slice(0, end).trimEnd();
+}
+
+function parseArticle(raw: string) {
+  if (!raw) return { title: "", readTime: "", intro: "", keyTakeaways: "", content: "", seoTitle: "", seoDescription: "" };
+
+  const line = (label: string) => {
+    const m = raw.match(new RegExp(`${label}[^\\n]*:\\s*\\n([^\\n═]+)`));
+    return m?.[1]?.trim() ?? "";
+  };
+
+  const block = (startRe: RegExp, endRe: RegExp) => {
+    const si = raw.search(startRe);
+    if (si === -1) return "";
+    const after = raw.indexOf("\n", si) + 1;
+    const rest  = raw.slice(after);
+    const ei    = rest.search(endRe);
+    return (ei === -1 ? rest : rest.slice(0, ei)).trim();
+  };
+
+  const rawContent = (() => {
+    const ci = raw.indexOf("POST CONTENT");
+    const si = raw.indexOf("SEO METADATA");
+    if (ci === -1) return "";
+    const slice = raw.slice(ci);
+    const nl1   = slice.indexOf("\n") + 1;
+    const nl2   = slice.indexOf("\n", nl1) + 1;
+    const body  = raw.slice(ci + nl2, si !== -1 ? si : undefined);
+    return body.replace(/^═+$/gm, "").trim();
+  })();
+
+  return {
+    title:          stripNbsp(line("POST TITLE")),
+    readTime:       stripNbsp(line("READ TIME")),
+    intro:          stripNbsp(block(/INTRO\s*[\(（]/, /KEY TAKEAWAYS|COVER IMAGE|═{5}/)),
+    keyTakeaways:   block(/KEY TAKEAWAYS/, /COVER IMAGE|═{5}/),
+    content:        cleanContent(rawContent),
+    seoTitle:       stripNbsp(line("SEO TITLE")),
+    seoDescription: stripNbsp(line("SEO DESCRIPTION")),
+  };
+}
+
+/** Find IMAGE_PLACEHOLDER_xxx and URL À CONFIRMER only in cleaned content. */
+function findPlaceholders(content: string) {
+  const images = [...new Set([...content.matchAll(/IMAGE_PLACEHOLDER_[\w-]+/gi)].map(m => m[0]))];
+  const urls   = [...new Set([...content.matchAll(/\[URL [ÀA] CONFIRMER[^\]]*\]/gi)].map(m => m[0]))];
+  return { images, urls };
+}
+
+const LANG_LABELS: Record<string, string> = {
+  en: "English", fr: "French", de: "German", es: "Spanish", nl: "Dutch",
+};
+
+// ── Field component ───────────────────────────────────────────────────────────
+
+function Field({
+  label, initialValue, copiedKey, activeCopied, onCopy,
+  type = "plain", rows = 4,
+}: {
+  label: string;
+  initialValue: string;
+  copiedKey: string;
+  activeCopied: string | null;
+  onCopy: (key: string, value: string) => void;
+  /** plain = single-line editable input | multiline = textarea | date = date input */
+  type?: "plain" | "multiline" | "date";
+  rows?: number;
+}) {
+  const [value, setValue] = useState(initialValue);
+  const initialised = useRef(false);
+
+  // Only sync from parent on first real value (article load)
+  useEffect(() => {
+    if (initialValue && !initialised.current) {
+      setValue(initialValue);
+      initialised.current = true;
+    }
+  }, [initialValue]);
+
+  const isCopied = activeCopied === copiedKey;
+  const shared   = "w-full bg-transparent px-4 py-3 text-sm text-gray-100 focus:outline-none resize-y";
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
+        <button
+          onClick={() => onCopy(copiedKey, value)}
+          className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-colors ${
+            isCopied
+              ? "text-green-400 bg-green-900/40 border-green-800"
+              : "text-gray-500 border-transparent hover:text-white hover:bg-gray-800"
+          }`}
+        >
+          {isCopied ? <Check size={11} /> : <Copy size={11} />}
+          {isCopied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+
+      {type === "date" ? (
+        <input
+          type="date"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          className="w-full bg-transparent px-4 py-3 text-sm text-gray-100 focus:outline-none"
+        />
+      ) : type === "multiline" ? (
+        <textarea
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          rows={rows}
+          className={`${shared} font-mono leading-relaxed`}
+        />
+      ) : (
+        <input
+          type="text"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          className={`${shared}`}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Editable content field with incremental URL injection ─────────────────────
+
+function ContentField({
+  initialValue, urlMap, copiedKey, activeCopied, onCopy,
+}: {
+  initialValue: string;
+  urlMap: Record<string, string>;
+  copiedKey: string;
+  activeCopied: string | null;
+  onCopy: (key: string, value: string) => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  const prevUrlMap        = useRef<Record<string, string>>({});
+  const initialised       = useRef(false);
+
+  // Seed on first load
+  useEffect(() => {
+    if (initialValue && !initialised.current) {
+      setValue(initialValue);
+      initialised.current = true;
+    }
+  }, [initialValue]);
+
+  // Incremental replacement: undo old URL → apply new URL, preserving manual edits
+  useEffect(() => {
+    setValue(prev => {
+      let next = prev;
+      for (const ph of Object.keys({ ...prevUrlMap.current, ...urlMap })) {
+        const oldUrl = prevUrlMap.current[ph] ?? "";
+        const newUrl = urlMap[ph] ?? "";
+        if (oldUrl === newUrl) continue;
+        if (oldUrl) next = next.split(oldUrl).join(ph);
+        if (newUrl) next = next.split(ph).join(newUrl);
+      }
+      prevUrlMap.current = { ...urlMap };
+      return next;
+    });
+  }, [urlMap]);
+
+  const isCopied = activeCopied === copiedKey;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Content</span>
+        <button
+          onClick={() => onCopy(copiedKey, value)}
+          className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-colors ${
+            isCopied
+              ? "text-green-400 bg-green-900/40 border-green-800"
+              : "text-gray-500 border-transparent hover:text-white hover:bg-gray-800"
+          }`}
+        >
+          {isCopied ? <Check size={11} /> : <Copy size={11} />}
+          {isCopied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+      <textarea
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        rows={22}
+        className="w-full bg-transparent px-4 py-3 text-sm text-gray-100 font-mono leading-relaxed resize-y focus:outline-none"
+      />
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+export default function ArticleDetailPage() {
+  const router = useRouter();
+  const { id } = useParams() as { id: string };
+
+  const [rawContent, setRawContent] = useState("");
+  const [meta, setMeta]             = useState<any>(null);
+  const [loading, setLoading]       = useState(true);
+  const [urlMap, setUrlMap]         = useState<Record<string, string>>({});
+  const [activeCopied, setCopied]   = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`http://localhost:8000/api/articles/${id}`)
+      .then(r => r.json())
+      .then(d => { setRawContent(d.content || ""); setMeta(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [id]);
+
+  const sections     = useMemo(() => parseArticle(rawContent), [rawContent]);
+  const placeholders = useMemo(() => findPlaceholders(sections.content), [sections.content]);
+
+  const handleCopy = useCallback((key: string, value: string) => {
+    navigator.clipboard.writeText(value).catch(() => {});
+    setCopied(key);
+    setTimeout(() => setCopied(null), 2000);
+  }, []);
+
+  const handleUrlChange = (ph: string, url: string) =>
+    setUrlMap(prev => ({ ...prev, [ph]: url }));
+
+  const today = new Date().toISOString().split("T")[0];
+  const filledCount = Object.values(urlMap).filter(Boolean).length;
+  const totalCount  = placeholders.images.length + placeholders.urls.length;
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64 text-gray-500 text-sm">Loading…</div>
+  );
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      {/* Back */}
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={() => router.push("/library")}
+          className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft size={14} /> Back to Library
+        </button>
+        {meta?.title && <>
+          <span className="text-gray-700">·</span>
+          <span className="text-sm text-gray-500 truncate max-w-lg">{meta.title}</span>
+        </>}
+      </div>
+
+      <div className="grid grid-cols-3 gap-6 items-start">
+
+        {/* ── CMS fields ── */}
+        <div className="col-span-2 space-y-4">
+
+          <Field label="Title"          initialValue={sections.title}          copiedKey="title"    activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
+          <Field label="Publish Date"   initialValue={today}                   copiedKey="date"     activeCopied={activeCopied} onCopy={handleCopy} type="date" />
+          <Field label="Language"       initialValue={LANG_LABELS[meta?.lang] ?? meta?.lang ?? ""} copiedKey="lang" activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
+          <Field label="Read Time"      initialValue={sections.readTime}       copiedKey="readTime" activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
+          <Field label="Intro"          initialValue={sections.intro}          copiedKey="intro"    activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={4} />
+          <Field label="Key Takeaways"  initialValue={sections.keyTakeaways}   copiedKey="kt"       activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={5} />
+
+          <ContentField
+            initialValue={sections.content}
+            urlMap={urlMap}
+            copiedKey="content"
+            activeCopied={activeCopied}
+            onCopy={handleCopy}
+          />
+
+          <Field label="SEO Title"       initialValue={sections.seoTitle}       copiedKey="seoTitle" activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
+          <Field label="SEO Description" initialValue={sections.seoDescription} copiedKey="seoDesc"  activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={3} />
+
+        </div>
+
+        {/* ── Placeholder manager ── */}
+        <div className="col-span-1 sticky top-6 space-y-4">
+
+          <div>
+            <h2 className="text-sm font-semibold text-white mb-1">Placeholder Manager</h2>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Paste URLs below — they auto-replace inside the Content field. Your manual edits are preserved.
+            </p>
+          </div>
+
+          {placeholders.images.length > 0 && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                <ImageIcon size={11} /> Images ({placeholders.images.length})
+              </div>
+              {placeholders.images.map(ph => (
+                <div key={ph}>
+                  <div className="text-xs text-blue-400 font-mono mb-1.5 truncate" title={ph}>{ph}</div>
+                  <input
+                    type="url"
+                    placeholder="Paste image URL…"
+                    value={urlMap[ph] ?? ""}
+                    onChange={e => handleUrlChange(ph, e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  {urlMap[ph] && (
+                    <div className="mt-1.5 rounded-md overflow-hidden border border-gray-700 bg-gray-800">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={urlMap[ph]} alt=""
+                        className="w-full h-20 object-cover"
+                        onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {placeholders.urls.length > 0 && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                <Link2 size={11} /> URLs à confirmer ({placeholders.urls.length})
+              </div>
+              {placeholders.urls.map(ph => (
+                <div key={ph}>
+                  <div className="text-xs text-yellow-500 font-mono mb-1.5 break-all leading-relaxed">{ph}</div>
+                  <input
+                    type="url"
+                    placeholder="Paste URL…"
+                    value={urlMap[ph] ?? ""}
+                    onChange={e => handleUrlChange(ph, e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {totalCount === 0 && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-xs text-gray-600">
+              No placeholders detected in this article.
+            </div>
+          )}
+
+          {totalCount > 0 && (
+            <div className={`text-xs font-medium ${filledCount === totalCount ? "text-green-400" : "text-gray-500"}`}>
+              {filledCount}/{totalCount} placeholders filled
+              {filledCount === totalCount && " ✓"}
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
