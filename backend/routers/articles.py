@@ -69,6 +69,44 @@ def list_articles(status: str = None, lang: str = None):
     return {"articles": [dict(r) for r in rows]}
 
 
+@router.get("/articles/similar")
+def find_similar_articles(keyword: str, article_id: str = ""):
+    """Find existing articles with the same or overlapping focus keyword."""
+    conn = get_conn()
+    if article_id:
+        rows = conn.execute(
+            "SELECT id, title, slug, focus_keyword, lang, status FROM articles WHERE id != ?",
+            (article_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, title, slug, focus_keyword, lang, status FROM articles"
+        ).fetchall()
+    conn.close()
+
+    kw_lower = keyword.lower().strip()
+    kw_words = set(kw_lower.split())
+
+    similar = []
+    for row in rows:
+        r = dict(row)
+        existing = (r.get("focus_keyword") or "").lower().strip()
+        if not existing:
+            continue
+        if existing == kw_lower:
+            r["match_type"] = "exact"
+            similar.append(r)
+            continue
+        existing_words = set(existing.split())
+        if kw_words and existing_words:
+            overlap = len(kw_words & existing_words) / len(kw_words | existing_words)
+            if overlap >= 0.6:
+                r["match_type"] = "similar"
+                similar.append(r)
+
+    return {"similar": similar}
+
+
 @router.get("/articles/{article_id}")
 def get_article(article_id: str):
     conn = get_conn()

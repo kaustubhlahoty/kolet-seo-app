@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
 import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2 } from "lucide-react";
 
@@ -10,6 +11,7 @@ const stripNbsp = (s: string) => s.replace(/&nbsp;/g, " ").replace(/  +/g, " ").
 /** Strip author block and "Articles liés" from content body. */
 function cleanContent(c: string): string {
   const cutpoints = [
+    /^## FAQ/m,
     /^---\s*\n## À propos de l'auteur/m,
     /^## À propos de l'auteur/m,
     /^## Articles liés/m,
@@ -76,41 +78,43 @@ const LANG_LABELS: Record<string, string> = {
 
 function Field({
   label, initialValue, copiedKey, activeCopied, onCopy,
-  type = "plain", rows = 4,
+  type = "plain", rows = 4, onChange,
 }: {
   label: string;
   initialValue: string;
   copiedKey: string;
   activeCopied: string | null;
   onCopy: (key: string, value: string) => void;
-  /** plain = single-line editable input | multiline = textarea | date = date input */
   type?: "plain" | "multiline" | "date";
   rows?: number;
+  onChange?: (value: string) => void;
 }) {
   const [value, setValue] = useState(initialValue);
   const initialised = useRef(false);
 
-  // Only sync from parent on first real value (article load)
   useEffect(() => {
     if (initialValue && !initialised.current) {
       setValue(initialValue);
       initialised.current = true;
+      onChange?.(initialValue);
     }
   }, [initialValue]);
 
+  const handleChange = (v: string) => { setValue(v); onChange?.(v); };
+
   const isCopied = activeCopied === copiedKey;
-  const shared   = "w-full bg-transparent px-4 py-3 text-sm text-gray-100 focus:outline-none resize-y";
+  const shared   = "w-full bg-transparent px-4 py-3 text-sm text-gray-800 focus:outline-none resize-y";
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800">
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
+    <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-stone-200">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{label}</span>
         <button
           onClick={() => onCopy(copiedKey, value)}
           className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-colors ${
             isCopied
               ? "text-green-400 bg-green-900/40 border-green-800"
-              : "text-gray-500 border-transparent hover:text-white hover:bg-gray-800"
+              : "text-gray-500 border-transparent hover:text-gray-900 hover:bg-stone-100"
           }`}
         >
           {isCopied ? <Check size={11} /> : <Copy size={11} />}
@@ -122,13 +126,13 @@ function Field({
         <input
           type="date"
           value={value}
-          onChange={e => setValue(e.target.value)}
-          className="w-full bg-transparent px-4 py-3 text-sm text-gray-100 focus:outline-none"
+          onChange={e => handleChange(e.target.value)}
+          className="w-full bg-transparent px-4 py-3 text-sm text-gray-800 focus:outline-none"
         />
       ) : type === "multiline" ? (
         <textarea
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => handleChange(e.target.value)}
           rows={rows}
           className={`${shared} font-mono leading-relaxed`}
         />
@@ -136,7 +140,7 @@ function Field({
         <input
           type="text"
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => handleChange(e.target.value)}
           className={`${shared}`}
         />
       )}
@@ -186,15 +190,15 @@ function ContentField({
   const isCopied = activeCopied === copiedKey;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800">
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Content</span>
+    <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-stone-200">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Content</span>
         <button
           onClick={() => onCopy(copiedKey, value)}
           className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-colors ${
             isCopied
               ? "text-green-400 bg-green-900/40 border-green-800"
-              : "text-gray-500 border-transparent hover:text-white hover:bg-gray-800"
+              : "text-gray-500 border-transparent hover:text-gray-900 hover:bg-stone-100"
           }`}
         >
           {isCopied ? <Check size={11} /> : <Copy size={11} />}
@@ -205,7 +209,7 @@ function ContentField({
         value={value}
         onChange={e => setValue(e.target.value)}
         rows={22}
-        className="w-full bg-transparent px-4 py-3 text-sm text-gray-100 font-mono leading-relaxed resize-y focus:outline-none"
+        className="w-full bg-transparent px-4 py-3 text-sm text-gray-800 font-mono leading-relaxed resize-y focus:outline-none"
       />
     </div>
   );
@@ -222,9 +226,11 @@ export default function ArticleDetailPage() {
   const [loading, setLoading]       = useState(true);
   const [urlMap, setUrlMap]         = useState<Record<string, string>>({});
   const [activeCopied, setCopied]   = useState<string | null>(null);
+  const [serpTitle, setSerpTitle]   = useState("");
+  const [serpDesc, setSerpDesc]     = useState("");
 
   useEffect(() => {
-    fetch(`http://localhost:8000/api/articles/${id}`)
+    fetch(`${API_BASE}/api/articles/${id}`)
       .then(r => r.json())
       .then(d => { setRawContent(d.content || ""); setMeta(d); setLoading(false); })
       .catch(() => setLoading(false));
@@ -256,12 +262,12 @@ export default function ArticleDetailPage() {
       <div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => router.push("/library")}
-          className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
         >
           <ArrowLeft size={14} /> Back to Library
         </button>
         {meta?.title && <>
-          <span className="text-gray-700">·</span>
+          <span className="text-gray-400">·</span>
           <span className="text-sm text-gray-500 truncate max-w-lg">{meta.title}</span>
         </>}
       </div>
@@ -286,8 +292,42 @@ export default function ArticleDetailPage() {
             onCopy={handleCopy}
           />
 
-          <Field label="SEO Title"       initialValue={sections.seoTitle}       copiedKey="seoTitle" activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
-          <Field label="SEO Description" initialValue={sections.seoDescription} copiedKey="seoDesc"  activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={3} />
+          <Field label="SEO Title"       initialValue={sections.seoTitle}       copiedKey="seoTitle" activeCopied={activeCopied} onCopy={handleCopy} type="plain"      onChange={setSerpTitle} />
+          <Field label="SEO Description" initialValue={sections.seoDescription} copiedKey="seoDesc"  activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={3} onChange={setSerpDesc} />
+
+          {/* SERP Preview */}
+          {(serpTitle || serpDesc) && (
+            <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+              <div className="px-4 py-2.5 border-b border-stone-200">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Google Preview</span>
+              </div>
+              <div className="p-4">
+                {/* Google chrome bar mock */}
+                <div className="bg-stone-100 rounded-lg p-3 mb-3 font-sans">
+                  <div className="text-xs text-gray-500 mb-2">kolet.com › blog › {meta?.slug || "article"}</div>
+                  <div className={`text-base font-medium leading-snug mb-1 ${
+                    serpTitle.length > 60 ? "text-yellow-400" : "text-kolet-yellow"
+                  }`}>
+                    {serpTitle.length > 60 ? serpTitle.slice(0, 57) + "…" : serpTitle || "SEO Title"}
+                  </div>
+                  <div className={`text-sm leading-relaxed ${
+                    serpDesc.length > 155 ? "text-yellow-300/80" : "text-gray-500"
+                  }`}>
+                    {serpDesc.length > 155 ? serpDesc.slice(0, 152) + "…" : serpDesc || "Meta description will appear here."}
+                  </div>
+                </div>
+                {/* Character counts */}
+                <div className="flex gap-4 text-xs">
+                  <span className={serpTitle.length > 60 ? "text-yellow-400" : "text-gray-500"}>
+                    Title: {serpTitle.length}/60 chars {serpTitle.length > 60 && "— too long"}
+                  </span>
+                  <span className={serpDesc.length > 155 ? "text-yellow-400" : "text-gray-500"}>
+                    Description: {serpDesc.length}/155 chars {serpDesc.length > 155 && "— too long"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
         </div>
 
@@ -295,29 +335,29 @@ export default function ArticleDetailPage() {
         <div className="col-span-1 sticky top-6 space-y-4">
 
           <div>
-            <h2 className="text-sm font-semibold text-white mb-1">Placeholder Manager</h2>
+            <h2 className="text-sm font-semibold text-gray-900 mb-1">Placeholder Manager</h2>
             <p className="text-xs text-gray-500 leading-relaxed">
               Paste URLs below — they auto-replace inside the Content field. Your manual edits are preserved.
             </p>
           </div>
 
           {placeholders.images.length > 0 && (
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            <div className="bg-white border border-stone-200 rounded-xl p-4 space-y-4 shadow-sm">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                 <ImageIcon size={11} /> Images ({placeholders.images.length})
               </div>
               {placeholders.images.map(ph => (
                 <div key={ph}>
-                  <div className="text-xs text-blue-400 font-mono mb-1.5 truncate" title={ph}>{ph}</div>
+                  <div className="text-xs text-kolet-yellow font-mono mb-1.5 truncate" title={ph}>{ph}</div>
                   <input
                     type="url"
                     placeholder="Paste image URL…"
                     value={urlMap[ph] ?? ""}
                     onChange={e => handleUrlChange(ph, e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-white border border-stone-300 rounded-lg px-3 py-2 text-xs text-gray-900 placeholder-gray-500 focus:outline-none focus:border-kolet-yellow transition-colors"
                   />
                   {urlMap[ph] && (
-                    <div className="mt-1.5 rounded-md overflow-hidden border border-gray-700 bg-gray-800">
+                    <div className="mt-1.5 rounded-md overflow-hidden border border-stone-300 bg-stone-100">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={urlMap[ph]} alt=""
@@ -332,8 +372,8 @@ export default function ArticleDetailPage() {
           )}
 
           {placeholders.urls.length > 0 && (
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            <div className="bg-white border border-stone-200 rounded-xl p-4 space-y-4 shadow-sm">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                 <Link2 size={11} /> URLs à confirmer ({placeholders.urls.length})
               </div>
               {placeholders.urls.map(ph => (
@@ -344,7 +384,7 @@ export default function ArticleDetailPage() {
                     placeholder="Paste URL…"
                     value={urlMap[ph] ?? ""}
                     onChange={e => handleUrlChange(ph, e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-white border border-stone-300 rounded-lg px-3 py-2 text-xs text-gray-900 placeholder-gray-500 focus:outline-none focus:border-kolet-yellow transition-colors"
                   />
                 </div>
               ))}
@@ -352,7 +392,7 @@ export default function ArticleDetailPage() {
           )}
 
           {totalCount === 0 && (
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-xs text-gray-600">
+            <div className="bg-white border border-stone-200 rounded-xl p-4 text-xs text-gray-500 shadow-sm">
               No placeholders detected in this article.
             </div>
           )}

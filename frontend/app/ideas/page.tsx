@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { API_BASE } from "@/lib/api";
 import { Lightbulb, ChevronRight, Target, FileText, TrendingUp, Loader } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -49,7 +50,7 @@ export default function IdeasPage() {
   async function generateIdeas(keywords: any[], lang: string) {
     setLoading(true); setError("");
     try {
-      const res = await fetch("http://localhost:8000/api/ideas", {
+      const res = await fetch(`${API_BASE}/api/ideas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ keywords, lang }),
@@ -72,8 +73,8 @@ export default function IdeasPage() {
   return (
     <div className="p-8 max-w-5xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white mb-1">Article Ideas</h1>
-        <p className="text-gray-400">Claude has analysed your keywords and created these topic recommendations</p>
+        <h1 className="text-2xl font-bold text-gray-900 mb-1">Article Ideas</h1>
+        <p className="text-gray-500">Claude has analysed your keywords and created these topic recommendations</p>
       </div>
 
       {loading && (
@@ -91,7 +92,7 @@ export default function IdeasPage() {
         <div className="space-y-4">
           {topics.map((topic, i) => (
             <div key={topic.id}
-              className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors">
+              className="bg-white border border-stone-200 rounded-xl p-5 hover:border-stone-300 transition-colors shadow-sm">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
                   {/* Header */}
@@ -103,35 +104,35 @@ export default function IdeasPage() {
                     <span className="text-xs text-gray-500">
                       {formatIcons[topic.content_format] || "📄"} {topic.content_format}
                     </span>
-                    <span className="text-xs text-gray-600 ml-1">~{topic.word_count.toLocaleString()} words</span>
+                    <span className="text-xs text-gray-500 ml-1">~{topic.word_count.toLocaleString()} words</span>
                   </div>
 
                   {/* Headline */}
-                  <h3 className="text-base font-semibold text-white mb-2">{topic.headline}</h3>
+                  <h3 className="text-base font-semibold text-gray-900 mb-2">{topic.headline}</h3>
 
                   {/* Keywords */}
                   <div className="flex flex-wrap gap-1.5 mb-3">
-                    <span className="text-xs bg-blue-900/50 text-blue-300 border border-blue-800 px-2 py-0.5 rounded-full">
+                    <span className="text-xs bg-kolet-yellow/10 text-kolet-yellow/80 border border-kolet-yellow/20 px-2 py-0.5 rounded-full">
                       🎯 {topic.focus_keyword}
                     </span>
                     {(topic.secondary_keywords || []).slice(0, 4).map(kw => (
-                      <span key={kw} className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">{kw}</span>
+                      <span key={kw} className="text-xs bg-stone-100 text-gray-500 px-2 py-0.5 rounded-full">{kw}</span>
                     ))}
                   </div>
 
                   {/* Kolet angle */}
-                  <div className="bg-gray-800/60 rounded-lg px-3 py-2 text-xs text-gray-400 mb-2">
-                    <span className="text-gray-600 mr-1">Kolet angle:</span> {topic.kolet_angle}
+                  <div className="bg-stone-50 rounded-lg px-3 py-2 text-xs text-gray-500 mb-2">
+                    <span className="text-gray-500 mr-1">Kolet angle:</span> {topic.kolet_angle}
                   </div>
 
                   {/* Rationale */}
-                  <p className="text-xs text-gray-600 italic">{topic.rationale}</p>
+                  <p className="text-xs text-gray-500 italic">{topic.rationale}</p>
                 </div>
 
                 {/* Validate button */}
                 <button
                   onClick={() => validate(topic)}
-                  className="shrink-0 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
+                  className="shrink-0 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
                 >
                   Write <ChevronRight size={14} />
                 </button>
@@ -142,11 +143,11 @@ export default function IdeasPage() {
       )}
 
       {!loading && topics.length === 0 && !error && (
-        <div className="text-center py-20 text-gray-600">
+        <div className="text-center py-20 text-gray-500">
           <Lightbulb size={40} className="mx-auto mb-4 opacity-30" />
           <p className="text-sm">No topics yet — go to Research to get started</p>
           <button onClick={() => router.push("/research")}
-            className="mt-4 text-blue-400 text-sm hover:text-blue-300">
+            className="mt-4 text-kolet-yellow text-sm hover:text-kolet-yellow/80">
             ← Back to Research
           </button>
         </div>
