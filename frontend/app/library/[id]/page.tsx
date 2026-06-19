@@ -229,7 +229,10 @@ export default function ArticleDetailPage() {
   const [serpTitle, setSerpTitle]     = useState("");
   const [serpDesc, setSerpDesc]       = useState("");
   const [imagesGenerating, setImagesGenerating] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | null>(null);
+  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const saveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstLoad = useRef(true);
 
   function applyImages(images: any) {
     if (!images) return;
@@ -281,6 +284,22 @@ export default function ArticleDetailPage() {
 
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [id]);
+
+  // Auto-save urlMap to DB whenever it changes (skip the initial populate from DB)
+  useEffect(() => {
+    if (isFirstLoad.current) { isFirstLoad.current = false; return; }
+    if (Object.keys(urlMap).length === 0) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setSaveStatus('saving');
+    saveTimer.current = setTimeout(() => {
+      fetch(`${API_BASE}/api/articles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images: urlMap }),
+      }).then(() => setSaveStatus('saved'))
+        .catch(() => setSaveStatus(null));
+    }, 1000);
+  }, [urlMap]);
 
   function hasImages(images: any): boolean {
     if (!images) return false;
@@ -539,9 +558,21 @@ export default function ArticleDetailPage() {
           )}
 
           {totalCount > 0 && (
-            <div className={`text-xs font-medium ${filledCount === totalCount ? "text-green-400" : "text-gray-500"}`}>
-              {filledCount}/{totalCount} placeholders filled
-              {filledCount === totalCount && " ✓"}
+            <div className="flex items-center justify-between">
+              <div className={`text-xs font-medium ${filledCount === totalCount ? "text-green-400" : "text-gray-500"}`}>
+                {filledCount}/{totalCount} placeholders filled
+                {filledCount === totalCount && " ✓"}
+              </div>
+              {saveStatus === 'saving' && (
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <Loader size={10} className="animate-spin" /> Saving…
+                </span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="text-xs text-green-500 flex items-center gap-1">
+                  <Check size={10} /> Saved
+                </span>
+              )}
             </div>
           )}
 
