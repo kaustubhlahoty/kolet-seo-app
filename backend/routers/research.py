@@ -232,7 +232,7 @@ def run_research(req: ResearchRequest):
             "filters": [["keyword_info.search_volume", ">", 50]],
             "order_by": ["keyword_info.search_volume,desc"],
         }]
-        data = _post("dataforseo_labs/google/keywords_for_keywords/live", payload)
+        data = _post("dataforseo_labs/google/keyword_ideas/live", payload)
         items = data.get("tasks", [{}])[0].get("result", [{}])[0].get("items", []) or []
 
         keywords = []
