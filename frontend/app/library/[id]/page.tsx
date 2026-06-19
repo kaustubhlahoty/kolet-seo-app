@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2 } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download } from "lucide-react";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -488,13 +488,23 @@ export default function ArticleDetailPage() {
                     className="w-full bg-white border border-stone-300 rounded-lg px-3 py-2 text-xs text-gray-900 placeholder-gray-500 focus:outline-none focus:border-kolet-yellow transition-colors"
                   />
                   {urlMap[ph] && (
-                    <div className="mt-1.5 rounded-md overflow-hidden border border-stone-300 bg-stone-100">
+                    <div className="mt-1.5 rounded-md overflow-hidden border border-stone-300 bg-stone-100 relative group">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={urlMap[ph]} alt=""
                         className="w-full h-20 object-cover"
                         onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
                       />
+                      <a
+                        href={urlMap[ph]}
+                        download={`${ph}.jpg`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs bg-black/60 hover:bg-black/80 text-white px-2 py-1 rounded-md"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <Download size={10} /> Save
+                      </a>
                     </div>
                   )}
                 </div>
