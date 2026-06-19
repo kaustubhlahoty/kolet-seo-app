@@ -8,7 +8,6 @@ const HF_API  = 'https://fnf.higgsfield.ai';
 const HF_AUTH = 'https://fnf-device-auth.higgsfield.ai';
 
 async function getHiggsfieldToken(): Promise<string> {
-  // Try Neon-stored refresh token first (keeps rotating), fall back to env var
   let refreshToken = process.env.HIGGSFIELD_REFRESH_TOKEN || '';
   try {
     const rows = await sql`SELECT value FROM kv_store WHERE key='higgsfield_refresh_token'`;
@@ -25,7 +24,6 @@ async function getHiggsfieldToken(): Promise<string> {
   if (!res.ok) throw new Error(`Higgsfield auth failed: ${await res.text()}`);
   const data: any = await res.json();
 
-  // Persist the new refresh token so it keeps rotating
   if (data.refresh_token) {
     try {
       await sql`
@@ -38,28 +36,34 @@ async function getHiggsfieldToken(): Promise<string> {
   return data.access_token as string;
 }
 
-async function generateHiggsfieldImage(prompt: string, token: string): Promise<string | null> {
-  const createRes = await fetch(`${HF_API}/agents/jobs`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      job_set_type: 'gpt_image_2',
-      params: { prompt, aspect_ratio: '16:9', quality: 'medium', resolution: '1k', medias: [], reference_elements: [] },
-    }),
-  });
-  if (!createRes.ok) throw new Error(await createRes.text());
-  const jobIds: string[] = await createRes.json();
-  const jobId = jobIds[0];
-
-  // Poll for up to 55 seconds (Vercel limit is 60)
-  for (let i = 0; i < 11; i++) {
-    await new Promise(r => setTimeout(r, 5000));
-    const pollRes = await fetch(`${HF_API}/agents/jobs/${jobId}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
+async function submitJob(prompt: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${HF_API}/agents/jobs`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_set_type: 'gpt_image_2',
+        params: { prompt, aspect_ratio: '16:9', quality: 'medium', resolution: '1k', medias: [], reference_elements: [] },
+      }),
     });
-    const job: any = await pollRes.json();
-    if (job.status === 'completed') return job.result_url as string;
-    if (job.status === 'failed') return null;
+    if (!res.ok) return null;
+    const jobIds: string[] = await res.json();
+    return jobIds[0] ?? null;
+  } catch { return null; }
+}
+
+async function pollJob(jobId: string, token: string): Promise<string | null> {
+  // Poll up to 50s (10 × 5s) — leaves room for submit + overhead within 60s limit
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const res = await fetch(`${HF_API}/agents/jobs/${jobId}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const job: any = await res.json();
+      if (job.status === 'completed') return job.result_url as string;
+      if (job.status === 'failed') return null;
+    } catch {}
   }
   return null;
 }
@@ -88,7 +92,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const stream = new ReadableStream({
     async start(controller) {
-      // Safe enqueue — silently drops if client already navigated away
       const tryEnqueue = (obj: object) => { try { controller.enqueue(sse(obj)); } catch {} };
 
       try {
@@ -100,8 +103,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         }
         const { slug, title } = rows[0] as any;
 
-        // Get a fresh Higgsfield token once for all images
-        let token: string | null = null;
+        let token: string;
         try {
           token = await getHiggsfieldToken();
         } catch (e: any) {
@@ -110,20 +112,32 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           return;
         }
 
-        // Store as {placeholder: url} map so library can auto-populate
-        const imageMap: Record<string, string> = {};
-        const total = prompts.length;
+        tryEnqueue({ type: 'status', message: `Preparing ${prompts.length} image prompts…` });
 
-        for (let i = 0; i < prompts.length; i++) {
-          const { placeholder, prompt, description } = prompts[i];
-          tryEnqueue({ type: 'status', message: `Generating image ${i + 1}/${total}...` });
-          const finalPrompt = prompt || await refinePrompt(description || '', title || slug || '', '');
-          const url = await generateHiggsfieldImage(finalPrompt, token);
-          if (url) {
-            imageMap[placeholder] = url;
-            tryEnqueue({ type: 'image', url, index: i, placeholder });
-          }
-        }
+        // Step 1 — refine prompts + submit all jobs in parallel
+        const submitted = await Promise.all(
+          prompts.map(async ({ placeholder, prompt, description }: any) => {
+            const finalPrompt = prompt || await refinePrompt(description || '', title || slug || '', '');
+            const jobId = await submitJob(finalPrompt, token);
+            return jobId ? { placeholder, jobId } : null;
+          })
+        );
+
+        const validJobs = submitted.filter(Boolean) as { placeholder: string; jobId: string }[];
+        tryEnqueue({ type: 'status', message: `${validJobs.length} jobs submitted, polling…` });
+
+        // Step 2 — poll all jobs in parallel; emit each image as it completes
+        const imageMap: Record<string, string> = {};
+
+        await Promise.all(
+          validJobs.map(async ({ placeholder, jobId }) => {
+            const url = await pollJob(jobId, token);
+            if (url) {
+              imageMap[placeholder] = url;
+              tryEnqueue({ type: 'image', url, placeholder });
+            }
+          })
+        );
 
         await sql`UPDATE articles SET images=${JSON.stringify(imageMap)} WHERE id=${id}`;
         tryEnqueue({ type: 'images_done', images: imageMap });
