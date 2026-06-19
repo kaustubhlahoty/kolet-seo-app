@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       t.status = 'pending';
       await sql`
         INSERT INTO topics (id,headline,focus_keyword,secondary_keywords,content_format,kolet_angle,word_count,difficulty,target_zone,lang,rationale,status)
-        VALUES (${t.id},${t.headline},${t.focus_keyword},${JSON.stringify(t.secondary_keywords||[])},${t.content_format},${t.kolet_angle},${t.word_count||1200},${t.difficulty},${t.target_zone||'global'},${t.lang},${t.rationale||''},'pending')
+        VALUES (${t.id},${t.headline},${t.focus_keyword},${JSON.stringify(t.secondary_keywords||[])},${t.content_format},${t.kolet_angle},${t.word_count||1200},${t.difficulty},${t.target_zone||'global'},${t.lang},${t.rationale||''},${'pending'})
         ON CONFLICT (id) DO UPDATE SET headline=EXCLUDED.headline
       `;
       result.push(t);
