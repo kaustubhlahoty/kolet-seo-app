@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2 } from "lucide-react";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -302,6 +302,63 @@ export default function ArticleDetailPage() {
   const handleUrlChange = (ph: string, url: string) =>
     setUrlMap(prev => ({ ...prev, [ph]: url }));
 
+  async function generateImages() {
+    if (imagesGenerating || placeholders.images.length === 0) return;
+    const prompts = placeholders.images.map(ph => ({
+      placeholder: ph,
+      description: ph.replace(/^IMAGE_PLACEHOLDER_/i, '').replace(/[_-]/g, ' '),
+      prompt: '',
+    }));
+    setImagesGenerating(true);
+    sessionStorage.setItem(`generating-images-${id}`, 'true');
+    // Fire and forget — server continues even if we navigate away
+    fetch(`${API_BASE}/api/articles/${id}/generate-images`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompts }),
+    }).then(async res => {
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value).split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'image') {
+              setUrlMap(prev => ({ ...prev, [event.placeholder]: event.url }));
+            }
+            if (event.type === 'images_done') {
+              setImagesGenerating(false);
+              sessionStorage.removeItem(`generating-images-${id}`);
+              if (pollRef.current) clearInterval(pollRef.current);
+            }
+          } catch {}
+        }
+      }
+    }).catch(() => {});
+    // Also start polling as fallback if user navigates away and comes back
+    pollRef.current = setInterval(() => {
+      fetch(`${API_BASE}/api/articles/${id}`)
+        .then(r => r.json())
+        .then(fresh => {
+          if (hasImages(fresh.images)) {
+            applyImages(fresh.images);
+            setImagesGenerating(false);
+            sessionStorage.removeItem(`generating-images-${id}`);
+            if (pollRef.current) clearInterval(pollRef.current);
+          }
+        }).catch(() => {});
+    }, 5000);
+    setTimeout(() => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      setImagesGenerating(false);
+      sessionStorage.removeItem(`generating-images-${id}`);
+    }, 180000);
+  }
+
   const today = new Date().toISOString().split("T")[0];
   const filledCount = Object.values(urlMap).filter(Boolean).length;
   const totalCount  = placeholders.images.length + placeholders.urls.length;
@@ -404,8 +461,21 @@ export default function ArticleDetailPage() {
 
           {placeholders.images.length > 0 && (
             <div className="bg-white border border-stone-200 rounded-xl p-4 space-y-4 shadow-sm">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                <ImageIcon size={11} /> Images ({placeholders.images.length})
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <ImageIcon size={11} /> Images ({placeholders.images.length})
+                </div>
+                {filledCount < placeholders.images.length && (
+                  <button
+                    onClick={generateImages}
+                    disabled={imagesGenerating}
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 disabled:opacity-50 text-kolet-black rounded-lg font-medium transition-colors"
+                  >
+                    {imagesGenerating
+                      ? <><Loader size={10} className="animate-spin" /> Generating…</>
+                      : <><Wand2 size={10} /> Generate with AI</>}
+                  </button>
+                )}
               </div>
               {placeholders.images.map(ph => (
                 <div key={ph}>
