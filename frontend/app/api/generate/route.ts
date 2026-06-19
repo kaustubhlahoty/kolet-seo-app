@@ -82,11 +82,22 @@ Critical reminders:
         const titleMatch = fullText.match(/POST TITLE[^\n]*:\n([^\n═]+)/);
         const title = titleMatch?.[1]?.trim() ?? headline;
 
-        await sql`
-          INSERT INTO articles (id,topic_id,title,slug,lang,focus_keyword,target_zone,status,content,meta_description,images)
-          VALUES (${articleId},${topic_id},${title},${slug},${lang},${focus_keyword},${target_zone},${'draft'},${fullText},${''},${'[]'})
-        `;
-        await sql`UPDATE topics SET status='written' WHERE id=${topic_id}`;
+        const topicIdStr = String(topic_id ?? '');
+
+        try {
+          await sql`
+            INSERT INTO articles (id,topic_id,title,slug,lang,focus_keyword,target_zone,status,content,meta_description,images)
+            VALUES (${articleId},${topicIdStr},${title},${slug},${lang},${focus_keyword},${target_zone},${'draft'},${fullText},${''},${'[]'})
+          `;
+        } catch (e: any) {
+          throw new Error(`INSERT failed: ${e.message} | topic_id type: ${typeof topic_id}`);
+        }
+
+        try {
+          await sql`UPDATE topics SET status=${'written'} WHERE id=${topicIdStr}`;
+        } catch (e: any) {
+          throw new Error(`UPDATE failed: ${e.message}`);
+        }
 
         const imagePrompts = extractImagePrompts(fullText, headline, target_zone);
         controller.enqueue(sse({ type: 'done', article_id: articleId, title, image_prompts: imagePrompts }));
