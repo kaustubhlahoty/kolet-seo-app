@@ -181,6 +181,8 @@ export default function GeneratePage() {
     setPhase("generating");
     setStages(STAGES_IMAGES.map((s, i) => ({ ...s, active: i === 3 })));
     setImageProgress({ done: 0, total: imagePrompts.length });
+    // Signal library page to poll for images
+    sessionStorage.setItem(`generating-images-${articleId}`, "true");
 
     try {
       const res = await fetch(`${API_BASE}/api/articles/${articleId}/generate-images`, {
@@ -205,11 +207,12 @@ export default function GeneratePage() {
             const event = JSON.parse(line.slice(6));
             if (event.type === "image") {
               done_count++;
-              setImages(prev => [...prev, { url: `${API_BASE}${event.url}`, placeholder: event.placeholder }]);
+              setImages(prev => [...prev, { url: event.url, placeholder: event.placeholder }]);
               setImageProgress(prev => ({ ...prev, done: done_count }));
             }
             if (event.type === "images_done") {
               setStages(STAGES_IMAGES.map(s => ({ ...s, active: false, done: true })));
+              if (articleId) sessionStorage.removeItem(`generating-images-${articleId}`);
               setPhase("done");
             }
           } catch { /* skip */ }
@@ -424,6 +427,16 @@ export default function GeneratePage() {
                   )}
                 </div>
               </div>
+            )}
+
+            {phase === "generating" && articleId && (
+              <button
+                onClick={() => router.push(`/library/${articleId}`)}
+                className="w-full bg-stone-100 hover:bg-stone-200 text-gray-600 py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <ArrowRight size={14} /> View in Library
+                <span className="text-xs text-gray-400">(generation continues)</span>
+              </button>
             )}
 
             {phase === "done" && articleId && (

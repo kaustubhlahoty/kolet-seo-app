@@ -88,10 +88,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Safe enqueue — silently drops if client already navigated away
+      const tryEnqueue = (obj: object) => { try { controller.enqueue(sse(obj)); } catch {} };
+
       try {
         const rows = await sql`SELECT slug, title FROM articles WHERE id=${id}`;
         if (!rows.length) {
-          controller.enqueue(sse({ type: 'error', message: 'Article not found' }));
+          tryEnqueue({ type: 'error', message: 'Article not found' });
           controller.close();
           return;
         }
@@ -102,31 +105,32 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         try {
           token = await getHiggsfieldToken();
         } catch (e: any) {
-          controller.enqueue(sse({ type: 'error', message: `Higgsfield auth: ${e.message}` }));
+          tryEnqueue({ type: 'error', message: `Higgsfield auth: ${e.message}` });
           controller.close();
           return;
         }
 
-        const imageUrls: string[] = [];
+        // Store as {placeholder: url} map so library can auto-populate
+        const imageMap: Record<string, string> = {};
         const total = prompts.length;
 
         for (let i = 0; i < prompts.length; i++) {
           const { placeholder, prompt, description } = prompts[i];
-          controller.enqueue(sse({ type: 'status', message: `Generating image ${i + 1}/${total}...` }));
+          tryEnqueue({ type: 'status', message: `Generating image ${i + 1}/${total}...` });
           const finalPrompt = prompt || await refinePrompt(description || '', title || slug || '', '');
           const url = await generateHiggsfieldImage(finalPrompt, token);
           if (url) {
-            imageUrls.push(url);
-            controller.enqueue(sse({ type: 'image', url, index: i, placeholder }));
+            imageMap[placeholder] = url;
+            tryEnqueue({ type: 'image', url, index: i, placeholder });
           }
         }
 
-        await sql`UPDATE articles SET images=${JSON.stringify(imageUrls)} WHERE id=${id}`;
-        controller.enqueue(sse({ type: 'images_done', images: imageUrls }));
+        await sql`UPDATE articles SET images=${JSON.stringify(imageMap)} WHERE id=${id}`;
+        tryEnqueue({ type: 'images_done', images: imageMap });
       } catch (e: any) {
-        controller.enqueue(sse({ type: 'error', message: e.message }));
+        tryEnqueue({ type: 'error', message: e.message });
       } finally {
-        controller.close();
+        try { controller.close(); } catch {}
       }
     }
   });

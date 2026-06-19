@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2 } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader } from "lucide-react";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -221,20 +221,74 @@ export default function ArticleDetailPage() {
   const router = useRouter();
   const { id } = useParams() as { id: string };
 
-  const [rawContent, setRawContent] = useState("");
-  const [meta, setMeta]             = useState<any>(null);
-  const [loading, setLoading]       = useState(true);
-  const [urlMap, setUrlMap]         = useState<Record<string, string>>({});
-  const [activeCopied, setCopied]   = useState<string | null>(null);
-  const [serpTitle, setSerpTitle]   = useState("");
-  const [serpDesc, setSerpDesc]     = useState("");
+  const [rawContent, setRawContent]   = useState("");
+  const [meta, setMeta]               = useState<any>(null);
+  const [loading, setLoading]         = useState(true);
+  const [urlMap, setUrlMap]           = useState<Record<string, string>>({});
+  const [activeCopied, setCopied]     = useState<string | null>(null);
+  const [serpTitle, setSerpTitle]     = useState("");
+  const [serpDesc, setSerpDesc]       = useState("");
+  const [imagesGenerating, setImagesGenerating] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function applyImages(images: any) {
+    if (!images) return;
+    let map: Record<string, string> = {};
+    if (typeof images === 'string') {
+      try { map = JSON.parse(images); } catch { return; }
+    } else if (typeof images === 'object' && !Array.isArray(images)) {
+      map = images;
+    }
+    if (Object.keys(map).length > 0) setUrlMap(prev => ({ ...map, ...prev }));
+  }
 
   useEffect(() => {
+    const isGenerating = sessionStorage.getItem(`generating-images-${id}`) === 'true';
+    setImagesGenerating(isGenerating);
+
     fetch(`${API_BASE}/api/articles/${id}`)
       .then(r => r.json())
-      .then(d => { setRawContent(d.content || ""); setMeta(d); setLoading(false); })
+      .then(d => {
+        setRawContent(d.content || '');
+        setMeta(d);
+        setLoading(false);
+        applyImages(d.images);
+
+        // Poll every 5s if generation is in progress
+        if (isGenerating && !hasImages(d.images)) {
+          pollRef.current = setInterval(() => {
+            fetch(`${API_BASE}/api/articles/${id}`)
+              .then(r => r.json())
+              .then(fresh => {
+                if (hasImages(fresh.images)) {
+                  applyImages(fresh.images);
+                  setImagesGenerating(false);
+                  sessionStorage.removeItem(`generating-images-${id}`);
+                  if (pollRef.current) clearInterval(pollRef.current);
+                }
+              })
+              .catch(() => {});
+          }, 5000);
+          // Stop polling after 3 minutes regardless
+          setTimeout(() => {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setImagesGenerating(false);
+            sessionStorage.removeItem(`generating-images-${id}`);
+          }, 180000);
+        }
+      })
       .catch(() => setLoading(false));
+
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [id]);
+
+  function hasImages(images: any): boolean {
+    if (!images) return false;
+    if (typeof images === 'string') {
+      try { return Object.keys(JSON.parse(images)).length > 0; } catch { return false; }
+    }
+    return typeof images === 'object' && !Array.isArray(images) && Object.keys(images).length > 0;
+  }
 
   const sections     = useMemo(() => parseArticle(rawContent), [rawContent]);
   const placeholders = useMemo(() => findPlaceholders(sections.content), [sections.content]);
@@ -271,6 +325,13 @@ export default function ArticleDetailPage() {
           <span className="text-sm text-gray-500 truncate max-w-lg">{meta.title}</span>
         </>}
       </div>
+
+      {imagesGenerating && (
+        <div className="flex items-center gap-2 mb-4 px-4 py-2.5 bg-kolet-yellow/10 border border-kolet-yellow/30 rounded-xl text-sm text-gray-700">
+          <Loader size={13} className="animate-spin text-kolet-yellow shrink-0" />
+          Images are generating in the background — this page will update automatically when ready.
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-6 items-start">
 
