@@ -1,7 +1,7 @@
 import sqlite3, json, os
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "kolet_seo.db"
+DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).parent / "kolet_seo.db")))
 
 
 def get_conn():

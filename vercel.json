@@ -1,15 +1,6 @@
 {
-    "experimentalServices": {
-        "frontend": {
-            "root": "frontend",
-            "routePrefix": "/",
-            "framework": "nextjs"
-        },
-        "backend": {
-            "root": "backend",
-            "routePrefix": "/_/backend",
-            "runtime": "python3.12",
-            "entrypoint": "main.py"
-        }
-    }
+    "buildCommand": "cd frontend && npm run build",
+    "outputDirectory": "frontend/.next",
+    "framework": "nextjs",
+    "rootDirectory": "frontend"
 }
