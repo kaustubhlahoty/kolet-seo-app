@@ -229,6 +229,7 @@ export default function ArticleDetailPage() {
   const [serpTitle, setSerpTitle]     = useState("");
   const [serpDesc, setSerpDesc]       = useState("");
   const [imagesGenerating, setImagesGenerating] = useState(false);
+  const [generatingSingle, setGeneratingSingle] = useState<Record<string, boolean>>({});
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | null>(null);
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const saveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -320,6 +321,34 @@ export default function ArticleDetailPage() {
 
   const handleUrlChange = (ph: string, url: string) =>
     setUrlMap(prev => ({ ...prev, [ph]: url }));
+
+  async function generateSingleImage(ph: string) {
+    if (generatingSingle[ph]) return;
+    setGeneratingSingle(prev => ({ ...prev, [ph]: true }));
+    const description = ph.replace(/^IMAGE_PLACEHOLDER_/i, '').replace(/[_-]/g, ' ');
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/generate-images`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompts: [{ placeholder: ph, description, prompt: '' }] }),
+      });
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value).split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'image') setUrlMap(prev => ({ ...prev, [event.placeholder]: event.url }));
+          } catch {}
+        }
+      }
+    } catch {}
+    setGeneratingSingle(prev => ({ ...prev, [ph]: false }));
+  }
 
   async function generateImages() {
     if (imagesGenerating || placeholders.images.length === 0) return;
@@ -498,7 +527,21 @@ export default function ArticleDetailPage() {
               </div>
               {placeholders.images.map(ph => (
                 <div key={ph}>
-                  <div className="text-xs text-kolet-yellow font-mono mb-1.5 truncate" title={ph}>{ph}</div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-xs text-kolet-yellow font-mono truncate" title={ph}>{ph}</div>
+                    {!urlMap[ph] && (
+                      <button
+                        onClick={() => generateSingleImage(ph)}
+                        disabled={generatingSingle[ph] || imagesGenerating}
+                        className="flex items-center gap-1 text-xs px-2 py-0.5 bg-stone-100 hover:bg-stone-200 disabled:opacity-50 text-gray-600 rounded-md transition-colors shrink-0 ml-2"
+                        title="Generate this image with AI"
+                      >
+                        {generatingSingle[ph]
+                          ? <><Loader size={9} className="animate-spin" /> Generating…</>
+                          : <><Wand2 size={9} /> Generate</>}
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="url"
                     placeholder="Paste image URL…"
