@@ -84,7 +84,7 @@ Critical reminders:
 
         await sql`
           INSERT INTO articles (id,topic_id,title,slug,lang,focus_keyword,target_zone,status,content,meta_description,images)
-          VALUES (${articleId},${topic_id},${title},${slug},${lang},${focus_keyword},${target_zone},'draft',${fullText},'',[])
+          VALUES (${articleId},${topic_id},${title},${slug},${lang},${focus_keyword},${target_zone},'draft',${fullText},'','[]')
         `;
         await sql`UPDATE topics SET status='written' WHERE id=${topic_id}`;
 
