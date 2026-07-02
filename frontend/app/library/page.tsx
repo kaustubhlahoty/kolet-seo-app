@@ -4,7 +4,7 @@ import { API_BASE } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import {
   BookOpen, Search, ExternalLink, CheckCircle, AlertCircle,
-  Clock, Loader, Globe, Eye, Trash2, FileText, X, TrendingUp, BarChart2
+  Clock, Loader, Globe, Eye, Trash2, FileText, X, TrendingUp, BarChart2, Wand2, Languages
 } from "lucide-react";
 
 type Article = {
@@ -17,6 +17,7 @@ type Article = {
   status: "draft" | "reviewed" | "needs_revision" | "published";
   seo_score: number | null;
   eeat_score: number | null;
+  audit_report: string | null;
   drive_url: string | null;
   created_at: string;
   published_at: string | null;
@@ -26,8 +27,13 @@ type Article = {
 
 type AuditResult = {
   seo_score: number;
-  eeat_score: number;
+  eeat_score: number | null;
   verdict: string;
+  brand_voice_score: number | null;
+  depth_score: number | null;
+  accuracy_score: number | null;
+  structure_score: number | null;
+  seo_checks: Record<string, { pass: boolean; label: string; pts: number }>;
   issues: string[];
   fixes: string[];
 };
@@ -36,10 +42,10 @@ type GscPage = { url: string; clicks: number; impressions: number; ctr: number; 
 type GscStatus = { configured: boolean; site_url: string };
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-  draft:          { label: "Draft",          color: "text-gray-400 bg-stone-100 border-stone-200",         icon: Clock },
-  needs_revision: { label: "Needs Revision", color: "text-yellow-400 bg-yellow-900/30 border-yellow-800", icon: AlertCircle },
-  reviewed:       { label: "Reviewed",       color: "text-kolet-yellow bg-kolet-yellow/10 border-kolet-yellow/20",       icon: CheckCircle },
-  published:      { label: "Published",      color: "text-green-400 bg-green-900/30 border-green-800",    icon: CheckCircle },
+  draft:          { label: "Draft",          color: "text-white bg-stone-600 border-stone-500",         icon: Clock },
+  needs_revision: { label: "Needs Revision", color: "text-white bg-orange-500 border-orange-600",       icon: AlertCircle },
+  reviewed:       { label: "Reviewed",       color: "text-kolet-black bg-kolet-yellow border-yellow-400", icon: CheckCircle },
+  published:      { label: "Published",      color: "text-white bg-emerald-600 border-emerald-700",     icon: CheckCircle },
 };
 
 const LANG_FLAGS: Record<string, string>  = { en: "🇬🇧", fr: "🇫🇷", de: "🇩🇪", es: "🇪🇸", nl: "🇳🇱" };
@@ -122,13 +128,20 @@ export default function LibraryPage() {
   const [search, setSearch]           = useState("");
   const [filterStatus, setFilter]     = useState("");
   const [filterLang, setLangFilter]   = useState("");
-  const [auditing, setAuditing]       = useState<string | null>(null);
-  const [auditResult, setAuditResult] = useState<{ id: string; data: AuditResult } | null>(null);
+  const [auditing, setAuditing]         = useState<string | null>(null);
+  const [auditResults, setAuditResults] = useState<Record<string, AuditResult>>({});
+  const [rewriting, setRewriting]       = useState<string | null>(null);
+  const [rewriteError, setRewriteError] = useState<string | null>(null);
   const [selected, setSelected]       = useState<Set<string>>(new Set());
   const [deleting, setDeleting]       = useState(false);
   const [gscStatus, setGscStatus]     = useState<GscStatus | null>(null);
   const [gscPages, setGscPages]       = useState<GscPage[]>([]);
   const [gscLoading, setGscLoading]   = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishing, setPublishing]   = useState<string | null>(null);
+  const [translating, setTranslating] = useState<string | null>(null);
+  const [translateTarget, setTranslateTarget] = useState<Record<string, string>>({});
+  const [translateError, setTranslateError] = useState<string | null>(null);
 
   const fetchArticles = useCallback(async () => {
     try {
@@ -138,6 +151,14 @@ export default function LibraryPage() {
       const res = await fetch(`${API_BASE}/api/articles?${params}`);
       const data = await res.json();
       setArticles(data.articles);
+      // Hydrate persisted audit reports from DB
+      const persisted: Record<string, AuditResult> = {};
+      for (const a of data.articles) {
+        if (a.audit_report) {
+          try { persisted[a.id] = JSON.parse(a.audit_report); } catch {}
+        }
+      }
+      setAuditResults(prev => ({ ...prev, ...persisted }));
     } catch { /* ignore */ }
     setLoading(false);
   }, [filterStatus, filterLang]);
@@ -176,15 +197,73 @@ export default function LibraryPage() {
     try {
       const res = await fetch(`${API_BASE}/api/articles/${id}/audit`, { method: "POST" });
       const data = await res.json();
-      setAuditResult({ id, data });
+      setAuditResults(prev => ({ ...prev, [id]: data }));
       fetchArticles();
     } catch { /* ignore */ }
     setAuditing(null);
   }
 
+  async function runRewrite(id: string, auditData: AuditResult) {
+    setRewriting(id);
+    setRewriteError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/rewrite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          issues: auditData.issues,
+          fixes: auditData.fixes,
+          seo_checks: auditData.seo_checks,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) { setRewriteError(data.error); return; }
+      // Clear the stale audit report for this article — rewrite invalidates it
+      setAuditResults(prev => { const next = { ...prev }; delete next[id]; return next; });
+      fetchArticles();
+    } catch (e: any) {
+      setRewriteError(e.message);
+    } finally {
+      setRewriting(null);
+    }
+  }
+
   async function publish(id: string) {
-    await fetch(`${API_BASE}/api/articles/${id}/publish`, { method: "POST" });
-    fetchArticles();
+    setPublishing(id);
+    setPublishError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/articles/${id}/publish`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) {
+        setPublishError(data.error ?? 'Publish failed');
+        return;
+      }
+      fetchArticles();
+    } catch (e: any) {
+      setPublishError(e.message);
+    } finally {
+      setPublishing(null);
+    }
+  }
+
+  async function translateArticle(id: string, targetLang: string) {
+    setTranslating(id);
+    setTranslateError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/articles/${id}/translate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_lang: targetLang }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setTranslateError(data.error ?? "Translation failed"); return; }
+      fetchArticles();
+      router.push(`/library/${data.id}`);
+    } catch (e: any) {
+      setTranslateError(e.message);
+    } finally {
+      setTranslating(null);
+    }
   }
 
   async function deleteSelected() {
@@ -380,6 +459,24 @@ export default function LibraryPage() {
           </div>
         )}
 
+        {/* Translate error banner */}
+        {translateError && (
+          <div className="flex items-start gap-2 bg-red-700 border border-red-800 rounded-lg px-4 py-3 text-sm text-white mb-4">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span className="flex-1">{translateError}</span>
+            <button onClick={() => setTranslateError(null)} className="text-white/70 hover:text-white ml-2">✕</button>
+          </div>
+        )}
+
+        {/* Publish error banner */}
+        {publishError && (
+          <div className="flex items-start gap-2 bg-red-700 border border-red-800 rounded-lg px-4 py-3 text-sm text-white">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span className="flex-1">{publishError}</span>
+            <button onClick={() => setPublishError(null)} className="text-white/70 hover:text-white ml-2">✕</button>
+          </div>
+        )}
+
         {/* Articles */}
         {loading ? (
           <div className="flex items-center justify-center py-20 text-gray-500">
@@ -493,11 +590,23 @@ export default function LibraryPage() {
                           Audit
                         </button>
                       )}
-                      {(article.status === "reviewed" || article.status === "draft") && (
+                      {article.status === "needs_revision" && (
+                        <button
+                          onClick={() => runRewrite(article.id, auditResults[article.id] ?? { issues: [], fixes: [], seo_checks: {}, seo_score: 0, eeat_score: null, verdict: "FAIL", brand_voice_score: null, depth_score: null, accuracy_score: null, structure_score: null })}
+                          disabled={rewriting === article.id}
+                          className="text-xs px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
+                        >
+                          {rewriting === article.id ? <Loader size={10} className="animate-spin" /> : <Wand2 size={10} />}
+                          Rewrite
+                        </button>
+                      )}
+                      {article.status === "reviewed" && (
                         <button
                           onClick={() => publish(article.id)}
-                          className="text-xs px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded-lg text-white transition-colors"
+                          disabled={publishing === article.id}
+                          className="text-xs px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded-lg text-white transition-colors flex items-center gap-1 disabled:opacity-60"
                         >
+                          {publishing === article.id ? <Loader size={10} className="animate-spin" /> : null}
                           Publish
                         </button>
                       )}
@@ -507,28 +616,111 @@ export default function LibraryPage() {
                           <ExternalLink size={10} /> Drive
                         </a>
                       )}
+                      {/* Translate */}
+                      {translating === article.id ? (
+                        <span className="text-xs text-gray-500 flex items-center gap-1 px-3 py-1.5">
+                          <Loader size={10} className="animate-spin" /> Translating…
+                        </span>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <select
+                            value={translateTarget[article.id] || ""}
+                            onChange={e => setTranslateTarget(prev => ({ ...prev, [article.id]: e.target.value }))}
+                            className="text-xs border border-stone-300 rounded-lg px-2 py-1.5 text-gray-500 focus:outline-none focus:border-kolet-yellow bg-white"
+                          >
+                            <option value="">Translate to…</option>
+                            {ALL_LANGS.filter(l => l !== article.lang).map(l => (
+                              <option key={l} value={l}>{LANG_FLAGS[l]} {LANG_LABELS[l]}</option>
+                            ))}
+                          </select>
+                          {translateTarget[article.id] && (
+                            <button
+                              onClick={() => translateArticle(article.id, translateTarget[article.id])}
+                              className="text-xs px-2 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors flex items-center gap-1"
+                            >
+                              <Languages size={10} /> Go
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Audit result panel */}
-                  {auditResult?.id === article.id && (
-                    <div className="mt-4 pt-4 border-t border-stone-200">
-                      <div className="flex items-center gap-4 mb-2">
-                        <span className={`text-sm font-medium ${auditResult.data.verdict === "PASS" ? "text-green-400" : "text-yellow-400"}`}>
-                          {auditResult.data.verdict === "PASS" ? "✓ Passed" : "⚠ Needs Revision"}
-                        </span>
-                        <span className="text-xs text-gray-500">SEO: {auditResult.data.seo_score}/100</span>
-                        <span className="text-xs text-gray-500">EEAT: {auditResult.data.eeat_score}/100</span>
+                  {/* Audit result panel — shown if audit was run (persisted in DB or just run this session) */}
+                  {auditResults[article.id] && (() => {
+                    const ar = auditResults[article.id];
+                    return (
+                      <div className="mt-4 pt-4 border-t border-stone-200 space-y-3">
+                        {/* Verdict + scores */}
+                        <div className="flex items-center gap-4 flex-wrap">
+                          <span className={`text-sm font-semibold ${ar.verdict === "PASS" ? "text-green-400" : ar.verdict === "FAIL" ? "text-red-400" : "text-orange-500"}`}>
+                            {ar.verdict === "PASS" ? "✓ Passed" : ar.verdict === "FAIL" ? "✗ Fail" : "⚠ Needs Revision"}
+                          </span>
+                          <span className="text-xs text-gray-500">SEO <span className="text-gray-900 font-medium">{ar.seo_score}</span>/100</span>
+                          {ar.eeat_score !== null && (
+                            <span className="text-xs text-gray-500">EEAT <span className="text-gray-900 font-medium">{ar.eeat_score}</span>/100</span>
+                          )}
+                        </div>
+                        {/* Sub-scores */}
+                        {(ar.brand_voice_score !== null || ar.depth_score !== null) && (
+                          <div className="flex gap-4 flex-wrap">
+                            {[
+                              { label: "Voice",     val: ar.brand_voice_score },
+                              { label: "Depth",     val: ar.depth_score },
+                              { label: "Accuracy",  val: ar.accuracy_score },
+                              { label: "Structure", val: ar.structure_score },
+                            ].filter(s => s.val !== null).map(s => (
+                              <div key={s.label} className="text-center">
+                                <div className={`text-xs font-bold ${(s.val ?? 0) >= 75 ? "text-green-400" : (s.val ?? 0) >= 55 ? "text-yellow-400" : "text-red-400"}`}>{s.val}</div>
+                                <div className="text-xs text-gray-500">{s.label}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {/* Failed SEO checks */}
+                        {Object.entries(ar.seo_checks || {}).filter(([, v]) => !v.pass).length > 0 && (
+                          <div>
+                            <div className="text-xs text-gray-400 mb-1">SEO gaps</div>
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(ar.seo_checks).filter(([, v]) => !v.pass).map(([k, v]) => (
+                                <span key={k} className="text-xs bg-red-600 text-white border border-red-700 px-2 py-0.5 rounded-full">−{v.pts}pt {v.label}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* Fixes */}
+                        {ar.fixes.length > 0 && (
+                          <ul className="space-y-1">
+                            {ar.fixes.map((fix, i) => (
+                              <li key={i} className="text-xs text-gray-500">→ {fix}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {/* Rewrite CTA */}
+                        {ar.verdict !== "PASS" && (
+                          <div className="pt-2 border-t border-stone-200 flex items-center gap-3">
+                            <button
+                              onClick={() => runRewrite(article.id, ar)}
+                              disabled={rewriting === article.id}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+                            >
+                              {rewriting === article.id ? (
+                                <><Loader size={11} className="animate-spin" /> Rewriting… (~30s)</>
+                              ) : (
+                                <><FileText size={11} /> Rewrite with fixes</>
+                              )}
+                            </button>
+                            {rewriting === article.id && (
+                              <span className="text-xs text-gray-400">Claude is applying all fixes and SEO gaps. The article will update automatically.</span>
+                            )}
+                            {rewriteError && rewriting === null && (
+                              <span className="text-xs text-red-400">{rewriteError}</span>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {auditResult.data.fixes.length > 0 && (
-                        <ul className="space-y-1">
-                          {auditResult.data.fixes.map((fix, i) => (
-                            <li key={i} className="text-xs text-gray-500">→ {fix}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               );
             })}

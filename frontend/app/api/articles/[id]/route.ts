@@ -14,6 +14,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (body.images !== undefined) {
     await sql`UPDATE articles SET images=${JSON.stringify(body.images)} WHERE id=${id}`;
   }
+  if (body.content !== undefined) {
+    await sql`UPDATE articles SET content=${body.content} WHERE id=${id}`;
+  }
   return NextResponse.json({ ok: true });
 }
 

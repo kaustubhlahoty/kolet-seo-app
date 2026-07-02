@@ -1,9 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { sql } from '@/lib/db';
 import { getSystemPrompt } from '@/lib/prompts';
+import { getKoletKnowledgeBrief } from '@/lib/kolet-knowledge';
+import { getPricingContext } from '@/lib/pricing';
 import { randomUUID } from 'crypto';
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function extractImagePrompts(text: string, headline: string, zone: string) {
   const seen: Record<string, string> = {};
@@ -30,7 +32,17 @@ function extractImagePrompts(text: string, headline: string, zone: string) {
 }
 
 export async function POST(request: Request) {
-  const { topic_id, headline, focus_keyword, secondary_keywords = [], content_format = 'guide', kolet_angle = '', word_count = 1200, target_zone = 'global', lang = 'en', brief = '' } = await request.json();
+  const { topic_id, headline, focus_keyword, secondary_keywords = [], content_format = 'guide', kolet_angle = '', target_zone = 'global', lang = 'en', brief = '' } = await request.json();
+
+  const WORD_COUNT_BY_FORMAT: Record<string, string> = {
+    guide:      '1,000–1,500',
+    comparison: '1,000–1,400',
+    'how-to':   '800–1,200',
+    listicle:   '600–900',
+    faq:        '600–900',
+    pillar:     '1,500–2,000',
+  };
+  const wordCountTarget = WORD_COUNT_BY_FORMAT[content_format] ?? '800–1,200';
 
   const encoder = new TextEncoder();
   const sse = (obj: object) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
@@ -38,7 +50,7 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const articleId = randomUUID().slice(0, 8);
+        const articleId = randomUUID();
         controller.enqueue(sse({ type: 'status', message: 'Starting article generation...' }));
 
         const SYSTEM = getSystemPrompt(lang);
@@ -56,11 +68,18 @@ Kolet angle: ${kolet_angle}
 Language: ${langLabel} — write the ENTIRE article in ${langLabel}, including all headings, intro, takeaways, and SEO fields.
 
 Critical reminders:
-- Body word count: 600-800 words (post.content only)
+- Body word count: ${wordCountTarget} words (post.content only, excluding intro/takeaways/metadata)
 - PROMO card with exact syntax required
 - Follow all typography rules for ${langLabel}`;
 
         if (brief) prompt += `\n\nContent brief to follow (use this as your structural guide):\n${brief}`;
+
+        prompt += `\n\n${getKoletKnowledgeBrief()}`;
+
+        // Inject live pricing — destination articles get zone-specific prices + network names
+        controller.enqueue(sse({ type: 'status', message: 'Fetching live pricing data...' }));
+        const pricingCtx = await getPricingContext(target_zone).catch(() => '');
+        if (pricingCtx) prompt += `\n\n${pricingCtx}`;
 
         controller.enqueue(sse({ type: 'status', message: `Claude is writing your article in ${langLabel}...` }));
 
@@ -86,8 +105,8 @@ Critical reminders:
 
         try {
           await sql`
-            INSERT INTO articles (id,topic_id,title,slug,lang,focus_keyword,target_zone,status,content,meta_description,images)
-            VALUES (${articleId},${topicIdStr},${title},${slug},${lang},${focus_keyword},${target_zone},${'draft'},${fullText},${''},${'[]'})
+            INSERT INTO articles (id,topic_id,title,slug,lang,focus_keyword,target_zone,content_format,status,content,meta_description,images)
+            VALUES (${articleId},${topicIdStr},${title},${slug},${lang},${focus_keyword},${target_zone},${content_format},${'draft'},${fullText},${''},${'[]'})
           `;
         } catch (e: any) {
           throw new Error(`INSERT failed: ${e.message} | topic_id type: ${typeof topic_id}`);
@@ -101,6 +120,12 @@ Critical reminders:
 
         const imagePrompts = extractImagePrompts(fullText, headline, target_zone);
         controller.enqueue(sse({ type: 'done', article_id: articleId, title, image_prompts: imagePrompts }));
+
+        // Fire review in background — retries once on failure so eeat_score is reliably set
+        const origin = new URL(request.url).origin;
+        fetch(`${origin}/api/articles/${articleId}/review`, { method: 'POST' })
+          .then(r => { if (!r.ok) return fetch(`${origin}/api/articles/${articleId}/review`, { method: 'POST' }); })
+          .catch(() => {});
       } catch (e: any) {
         controller.enqueue(sse({ type: 'error', message: e.message }));
       } finally {

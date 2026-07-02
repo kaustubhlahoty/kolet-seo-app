@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -151,13 +151,14 @@ function Field({
 // ── Editable content field with incremental URL injection ─────────────────────
 
 function ContentField({
-  initialValue, urlMap, copiedKey, activeCopied, onCopy,
+  initialValue, urlMap, copiedKey, activeCopied, onCopy, onChange,
 }: {
   initialValue: string;
   urlMap: Record<string, string>;
   copiedKey: string;
   activeCopied: string | null;
   onCopy: (key: string, value: string) => void;
+  onChange?: (value: string) => void;
 }) {
   const [value, setValue] = useState(initialValue);
   const prevUrlMap        = useRef<Record<string, string>>({});
@@ -207,7 +208,7 @@ function ContentField({
       </div>
       <textarea
         value={value}
-        onChange={e => setValue(e.target.value)}
+        onChange={e => { setValue(e.target.value); onChange?.(e.target.value); }}
         rows={22}
         className="w-full bg-transparent px-4 py-3 text-sm text-gray-800 font-mono leading-relaxed resize-y focus:outline-none"
       />
@@ -230,10 +231,38 @@ export default function ArticleDetailPage() {
   const [serpDesc, setSerpDesc]       = useState("");
   const [imagesGenerating, setImagesGenerating] = useState(false);
   const [generatingSingle, setGeneratingSingle] = useState<Record<string, boolean>>({});
+  const [errorSingle, setErrorSingle] = useState<Record<string, string>>({});
+  const [needsAsset, setNeedsAsset] = useState<Record<string, string>>({});
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | null>(null);
-  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const saveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isFirstLoad = useRef(true);
+  const [review, setReview]             = useState<any>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError]   = useState('');
+  const [applyingFixes, setApplyingFixes] = useState(false);
+  const [applyError, setApplyError]     = useState('');
+  const [contentKey, setContentKey]     = useState(0);
+  const [seoFieldsKey, setSeoFieldsKey] = useState(0);
+  const [selectedTitle, setSelectedTitle] = useState('');
+  const [selectedMeta, setSelectedMeta]   = useState('');
+  const [applyingCtr, setApplyingCtr]     = useState(false);
+  const [editPrompt, setEditPrompt]     = useState('');
+  const [editing, setEditing]           = useState(false);
+  const [editError, setEditError]       = useState('');
+  const [editSuccess, setEditSuccess]   = useState(false);
+  // Content save state
+  const [isDirty, setIsDirty]           = useState(false);
+  const [isSaving, setIsSaving]         = useState(false);
+  const [saveError, setSaveError]       = useState('');
+  const [lastSavedAt, setLastSavedAt]   = useState('');
+  const pollRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const saveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstLoad   = useRef(true);
+  // Refs for closure-safe access inside autosave callback
+  const rawContentRef  = useRef('');
+  const liveContentRef = useRef('');
+  const serpTitleRef   = useRef('');
+  const serpDescRef    = useRef('');
+  const sectionsRef    = useRef<ReturnType<typeof parseArticle>>({ title: '', readTime: '', intro: '', keyTakeaways: '', content: '', seoTitle: '', seoDescription: '' });
 
   function applyImages(images: any) {
     if (!images) return;
@@ -313,6 +342,82 @@ export default function ArticleDetailPage() {
   const sections     = useMemo(() => parseArticle(rawContent), [rawContent]);
   const placeholders = useMemo(() => findPlaceholders(sections.content), [sections.content]);
 
+  // Keep refs in sync so autosave callback always reads latest values
+  useEffect(() => { rawContentRef.current = rawContent; sectionsRef.current = sections; }, [rawContent, sections]);
+  useEffect(() => { serpTitleRef.current = serpTitle; }, [serpTitle]);
+  useEffect(() => { serpDescRef.current = serpDesc; }, [serpDesc]);
+
+  // Reset dirty tracking when AI rewrites the content
+  useEffect(() => {
+    liveContentRef.current = '';
+    setIsDirty(false);
+  }, [contentKey]);
+
+  // ── Splice a new body into rawContent while preserving CMS header + SEO footer + FAQ tail ──
+  function replaceContentBody(raw: string, newBody: string): string {
+    const ci = raw.indexOf("POST CONTENT");
+    const si = raw.indexOf("SEO METADATA");
+    if (ci === -1) return raw;
+    const slice = raw.slice(ci);
+    const nl1 = slice.indexOf("\n") + 1;
+    const nl2 = slice.indexOf("\n", nl1) + 1;
+    const bodyStart = ci + nl2;
+    const bodyEnd   = si !== -1 ? si : raw.length;
+
+    // Preserve FAQ/author tail so AI-generated sections aren't lost
+    const originalBody = raw.slice(bodyStart, bodyEnd);
+    const tailPatterns = [/^## FAQ/m, /^---\s*\n## À propos de l'auteur/m, /^## À propos de l'auteur/m, /^## Articles liés/m];
+    let tailStart = originalBody.length;
+    for (const re of tailPatterns) {
+      const m = originalBody.search(re);
+      if (m !== -1 && m < tailStart) tailStart = m;
+    }
+    const tail = tailStart < originalBody.length ? '\n\n' + originalBody.slice(tailStart).trim() : '';
+
+    return raw.slice(0, bodyStart) + newBody + tail + '\n\n' + raw.slice(bodyEnd);
+  }
+
+  // ── Save content to DB (reads from refs — safe inside setTimeout/useCallback) ──
+  const saveContent = useCallback(async () => {
+    if (!rawContentRef.current) return;
+    setIsSaving(true);
+    setSaveError('');
+    try {
+      let updatedRaw = rawContentRef.current;
+
+      const liveBody = liveContentRef.current;
+      if (liveBody) updatedRaw = replaceContentBody(updatedRaw, liveBody);
+
+      const title = serpTitleRef.current;
+      const desc  = serpDescRef.current;
+      if (title?.trim()) updatedRaw = replaceSeoLine(updatedRaw, 'SEO TITLE', title);
+      if (desc?.trim())  updatedRaw = replaceSeoLine(updatedRaw, 'SEO DESCRIPTION', desc);
+
+      await fetch(`${API_BASE}/api/articles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: updatedRaw }),
+      });
+
+      rawContentRef.current = updatedRaw;
+      setRawContent(updatedRaw);
+      setIsDirty(false);
+      setLastSavedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+    } catch (e: any) {
+      setSaveError(e.message || 'Save failed');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [id]);
+
+  // ── Track content edits + debounce autosave ──
+  function handleContentChange(value: string) {
+    liveContentRef.current = value;
+    setIsDirty(true);
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
+    autoSaveRef.current = setTimeout(() => saveContent(), 2000);
+  }
+
   const handleCopy = useCallback((key: string, value: string) => {
     navigator.clipboard.writeText(value).catch(() => {});
     setCopied(key);
@@ -322,31 +427,52 @@ export default function ArticleDetailPage() {
   const handleUrlChange = (ph: string, url: string) =>
     setUrlMap(prev => ({ ...prev, [ph]: url }));
 
+  // Extract description from markdown alt-text in content, or build a title-enriched fallback
+  function descriptionForPlaceholder(ph: string): string {
+    const mdMatch = rawContent.match(new RegExp(`!\\[([^\\]]+)\\]\\(${ph}\\)`, 'i'));
+    if (mdMatch?.[1]) return mdMatch[1];
+    const rawName = ph.replace(/^IMAGE_PLACEHOLDER_/i, '').replace(/[_-]/g, ' ');
+    return meta?.title ? `${rawName} — ${meta.title}` : rawName;
+  }
+
   async function generateSingleImage(ph: string) {
     if (generatingSingle[ph]) return;
     setGeneratingSingle(prev => ({ ...prev, [ph]: true }));
-    const description = ph.replace(/^IMAGE_PLACEHOLDER_/i, '').replace(/[_-]/g, ' ');
+    setErrorSingle(prev => ({ ...prev, [ph]: '' }));
+    const description = descriptionForPlaceholder(ph);
     try {
       const res = await fetch(`${API_BASE}/api/articles/${id}/generate-images`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompts: [{ placeholder: ph, description, prompt: '' }] }),
       });
-      if (!res.body) return;
+      if (!res.body) {
+        setErrorSingle(prev => ({ ...prev, [ph]: 'No response from server' }));
+        setGeneratingSingle(prev => ({ ...prev, [ph]: false }));
+        return;
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buf = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const line of decoder.decode(value).split('\n')) {
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop() ?? "";
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
             if (event.type === 'image') setUrlMap(prev => ({ ...prev, [event.placeholder]: event.url }));
+            if (event.type === 'error') setErrorSingle(prev => ({ ...prev, [ph]: event.message }));
+            if (event.type === 'needs_asset') setNeedsAsset(prev => ({ ...prev, [event.placeholder]: event.message }));
           } catch {}
         }
       }
-    } catch {}
+      if (buf.startsWith('data: ')) { try { const e = JSON.parse(buf.slice(6)); if (e.type === 'image') setUrlMap(prev => ({ ...prev, [e.placeholder]: e.url })); if (e.type === 'needs_asset') setNeedsAsset(prev => ({ ...prev, [e.placeholder]: e.message })); } catch {} }
+    } catch (e: any) {
+      setErrorSingle(prev => ({ ...prev, [ph]: e.message || 'Generation failed' }));
+    }
     setGeneratingSingle(prev => ({ ...prev, [ph]: false }));
   }
 
@@ -354,7 +480,7 @@ export default function ArticleDetailPage() {
     if (imagesGenerating || placeholders.images.length === 0) return;
     const prompts = placeholders.images.map(ph => ({
       placeholder: ph,
-      description: ph.replace(/^IMAGE_PLACEHOLDER_/i, '').replace(/[_-]/g, ' '),
+      description: descriptionForPlaceholder(ph),
       prompt: '',
     }));
     setImagesGenerating(true);
@@ -368,15 +494,21 @@ export default function ArticleDetailPage() {
       if (!res.body) return;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let imgBuf = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const line of decoder.decode(value).split('\n')) {
+        imgBuf += decoder.decode(value, { stream: true });
+        const lines = imgBuf.split('\n'); imgBuf = lines.pop() ?? "";
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
             if (event.type === 'image') {
               setUrlMap(prev => ({ ...prev, [event.placeholder]: event.url }));
+            }
+            if (event.type === 'needs_asset') {
+              setNeedsAsset(prev => ({ ...prev, [event.placeholder]: event.message }));
             }
             if (event.type === 'images_done') {
               setImagesGenerating(false);
@@ -407,6 +539,95 @@ export default function ArticleDetailPage() {
     }, 180000);
   }
 
+  async function applyEdit() {
+    if (!editPrompt.trim()) return;
+    setEditing(true); setEditError(''); setEditSuccess(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction: editPrompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Edit failed');
+      setRawContent(data.content);
+      setContentKey(k => k + 1);
+      setEditPrompt('');
+      setEditSuccess(true);
+      setTimeout(() => setEditSuccess(false), 3000);
+    } catch (e: any) {
+      setEditError(e.message);
+    } finally {
+      setEditing(false);
+    }
+  }
+
+  function replaceSeoLine(content: string, field: string, newValue: string): string {
+    return content.replace(
+      new RegExp(`(${field}[^\\n]*:\\n)([^\\n═]+)`),
+      `$1${newValue}`
+    );
+  }
+
+  async function applyCtrVariants() {
+    if (!selectedTitle && !selectedMeta) return;
+    setApplyingCtr(true);
+    try {
+      let content = rawContent;
+      if (selectedTitle) content = replaceSeoLine(content, 'SEO TITLE', selectedTitle);
+      if (selectedMeta)  content = replaceSeoLine(content, 'SEO DESCRIPTION', selectedMeta);
+      await fetch(`${API_BASE}/api/articles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+      setRawContent(content);
+      setSeoFieldsKey(k => k + 1);
+      setSelectedTitle('');
+      setSelectedMeta('');
+    } catch {}
+    finally { setApplyingCtr(false); }
+  }
+
+  async function runReview() {
+    setReviewLoading(true); setReviewError(''); setReview(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/review`, { method: 'POST' });
+      if (!res.ok) throw new Error('Review failed');
+      setReview(await res.json());
+    } catch (e: any) {
+      setReviewError(e.message || 'Review failed');
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function applyFixes(voiceOnly = false) {
+    if (!review) return;
+    setApplyingFixes(true); setApplyError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/apply-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voice_rewrites: review.voice?.rewrites || [],
+          fact_issues: voiceOnly ? [] : (review.facts?.flagged_claims || []),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Apply failed');
+      if (data.content) {
+        setRawContent(data.content);
+        setContentKey(k => k + 1);
+        setReview(null);
+      }
+    } catch (e: any) {
+      setApplyError(e.message);
+    } finally {
+      setApplyingFixes(false);
+    }
+  }
+
   const today = new Date().toISOString().split("T")[0];
   const filledCount = Object.values(urlMap).filter(Boolean).length;
   const totalCount  = placeholders.images.length + placeholders.urls.length;
@@ -417,7 +638,7 @@ export default function ArticleDetailPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      {/* Back */}
+      {/* Back + Save bar */}
       <div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => router.push("/library")}
@@ -427,8 +648,33 @@ export default function ArticleDetailPage() {
         </button>
         {meta?.title && <>
           <span className="text-gray-400">·</span>
-          <span className="text-sm text-gray-500 truncate max-w-lg">{meta.title}</span>
+          <span className="text-sm text-gray-500 truncate max-w-xs">{meta.title}</span>
         </>}
+
+        <div className="ml-auto flex items-center gap-2.5">
+          {saveError && <span className="text-xs text-red-400">{saveError}</span>}
+          {isSaving && (
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <Loader size={11} className="animate-spin" /> Saving…
+            </span>
+          )}
+          {!isSaving && lastSavedAt && !isDirty && (
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <Check size={11} /> Saved {lastSavedAt}
+            </span>
+          )}
+          {isDirty && !isSaving && (
+            <span className="text-xs text-amber-500">Unsaved changes</span>
+          )}
+          <button
+            onClick={saveContent}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 disabled:opacity-40 text-kolet-black text-xs font-semibold rounded-lg transition-colors"
+          >
+            {isSaving ? <Loader size={11} className="animate-spin" /> : <Check size={11} />}
+            Save
+          </button>
+        </div>
       </div>
 
       {imagesGenerating && (
@@ -451,15 +697,17 @@ export default function ArticleDetailPage() {
           <Field label="Key Takeaways"  initialValue={sections.keyTakeaways}   copiedKey="kt"       activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={5} />
 
           <ContentField
+            key={contentKey}
             initialValue={sections.content}
             urlMap={urlMap}
             copiedKey="content"
             activeCopied={activeCopied}
             onCopy={handleCopy}
+            onChange={handleContentChange}
           />
 
-          <Field label="SEO Title"       initialValue={sections.seoTitle}       copiedKey="seoTitle" activeCopied={activeCopied} onCopy={handleCopy} type="plain"      onChange={setSerpTitle} />
-          <Field label="SEO Description" initialValue={sections.seoDescription} copiedKey="seoDesc"  activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={3} onChange={setSerpDesc} />
+          <Field key={`seoTitle-${seoFieldsKey}`}  label="SEO Title"       initialValue={sections.seoTitle}       copiedKey="seoTitle" activeCopied={activeCopied} onCopy={handleCopy} type="plain"      onChange={v => { setSerpTitle(v); if (v !== sections.seoTitle) setIsDirty(true); }} />
+          <Field key={`seoDesc-${seoFieldsKey}`}   label="SEO Description" initialValue={sections.seoDescription} copiedKey="seoDesc"  activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={3} onChange={v => { setSerpDesc(v); if (v !== sections.seoDescription) setIsDirty(true); }} />
 
           {/* SERP Preview */}
           {(serpTitle || serpDesc) && (
@@ -549,6 +797,15 @@ export default function ArticleDetailPage() {
                     onChange={e => handleUrlChange(ph, e.target.value)}
                     className="w-full bg-white border border-stone-300 rounded-lg px-3 py-2 text-xs text-gray-900 placeholder-gray-500 focus:outline-none focus:border-kolet-yellow transition-colors"
                   />
+                  {errorSingle[ph] && (
+                    <div className="mt-1 text-xs text-red-400 leading-relaxed">{errorSingle[ph]}</div>
+                  )}
+                  {needsAsset[ph] && !urlMap[ph] && (
+                    <div className="mt-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-xs text-amber-800 leading-relaxed">
+                      <span className="font-semibold block mb-0.5">📸 Asset needed from you:</span>
+                      {needsAsset[ph]}
+                    </div>
+                  )}
                   {urlMap[ph] && (
                     <div className="mt-1.5 rounded-md overflow-hidden border border-stone-300 bg-stone-100 relative group">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -621,6 +878,293 @@ export default function ArticleDetailPage() {
 
         </div>
       </div>
+
+      {/* ── Make changes with AI ── */}
+      <div className="mt-6">
+        <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="px-5 py-4 border-b border-stone-200 flex items-center gap-3">
+            <Wand2 size={16} className="text-kolet-yellow" />
+            <h2 className="text-sm font-semibold text-gray-900">Make changes with AI</h2>
+          </div>
+          <div className="p-5">
+            <textarea
+              value={editPrompt}
+              onChange={e => { setEditPrompt(e.target.value); setEditError(''); setEditSuccess(false); }}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) applyEdit(); }}
+              placeholder={`Describe the changes you want — e.g. "Make the intro more punchy and conversational", "Add a comparison table for eSIM plans in Japan", "Shorten the conclusion to 2 sentences", "Translate the tone to sound more casual for a French audience"…`}
+              rows={3}
+              className="w-full bg-stone-50 border border-stone-200 rounded-lg px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow resize-y leading-relaxed"
+            />
+            <div className="flex items-center justify-between mt-3">
+              <div className="text-xs text-gray-500">
+                {editError && <span className="text-red-400">{editError}</span>}
+                {editSuccess && <span className="text-emerald-500 flex items-center gap-1"><CheckCircle2 size={12} /> Changes applied successfully</span>}
+                {!editError && !editSuccess && <span>⌘↵ to apply</span>}
+              </div>
+              <button
+                onClick={applyEdit}
+                disabled={editing || !editPrompt.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-sm font-semibold rounded-lg transition-colors disabled:opacity-40"
+              >
+                {editing
+                  ? <><Loader size={13} className="animate-spin" /> Applying…</>
+                  : <><Wand2 size={13} /> Apply Changes</>
+                }
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── AI Review Panel ── */}
+      <div className="mt-6">
+        <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+          {/* Header */}
+          <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Sparkles size={16} className="text-kolet-yellow" />
+              <h2 className="text-sm font-semibold text-gray-900">AI Review</h2>
+              {review?.overall_score != null && (
+                <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
+                  review.overall_score >= 80 ? "bg-emerald-600 text-white" :
+                  review.overall_score >= 60 ? "bg-amber-500 text-stone-900" :
+                  "bg-red-600 text-white"
+                }`}>
+                  Score: {review.overall_score}/100
+                </span>
+              )}
+            </div>
+            <button
+              onClick={runReview}
+              disabled={reviewLoading}
+              className="flex items-center gap-1.5 px-4 py-2 border border-stone-300 hover:border-kolet-yellow hover:text-kolet-yellow text-sm text-gray-500 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {reviewLoading ? <><Loader size={13} className="animate-spin" /> Running…</> : 'Run Review'}
+            </button>
+          </div>
+
+          {reviewError && (
+            <div className="px-5 py-3 text-sm text-red-400 bg-red-700/10 border-b border-red-800/20">{reviewError}</div>
+          )}
+
+          {!review && !reviewLoading && (
+            <div className="px-5 py-10 text-center text-gray-500 text-sm">
+              <Sparkles size={28} className="mx-auto mb-3 opacity-30" />
+              <p>Run a review to check voice &amp; tone, facts, and get CTR-optimised title variants.</p>
+            </div>
+          )}
+
+          {reviewLoading && (
+            <div className="px-5 py-10 flex flex-col items-center gap-3 text-gray-500 text-sm">
+              <Loader size={24} className="animate-spin text-kolet-yellow" />
+              <p>Claude is reviewing Voice &amp; Tone, Facts, and CTR opportunities…</p>
+            </div>
+          )}
+
+          {review && (
+            <div className="divide-y divide-stone-200">
+
+              {/* Voice & Tone */}
+              {review.voice && (
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-semibold text-gray-900">Voice &amp; Tone</span>
+                    <span className={`text-sm font-bold ${
+                      review.voice.score >= 80 ? "text-emerald-500" :
+                      review.voice.score >= 60 ? "text-amber-500" : "text-red-500"
+                    }`}>{review.voice.score}/100</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-4 leading-relaxed">{review.voice.verdict}</p>
+
+                  {/* AI patterns */}
+                  {review.voice.ai_patterns?.length > 0 && (
+                    <div className="mb-4">
+                      {review.voice.ai_patterns.map((p: string, i: number) => (
+                        <div key={i} className="flex items-start gap-2 bg-red-600 border border-red-700 text-white rounded-lg px-3 py-2 mb-2 text-xs">
+                          <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                          "{p}"
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Rewrites */}
+                  {review.voice.rewrites?.length > 0 && (
+                    <div className="space-y-3">
+                      {review.voice.rewrites.map((rw: any, i: number) => (
+                        <div key={i} className="bg-stone-50 border border-stone-200 rounded-lg p-3 text-xs">
+                          <p className="line-through text-gray-400 leading-relaxed mb-1.5">{rw.original}</p>
+                          <p className="text-emerald-700 leading-relaxed">→ {rw.suggestion}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Fact Check */}
+              {review.facts && (
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-semibold text-gray-900">Fact Check</span>
+                    <span className={`text-sm font-bold ${
+                      review.facts.score >= 80 ? "text-emerald-500" :
+                      review.facts.score >= 60 ? "text-amber-500" : "text-red-500"
+                    }`}>{review.facts.score}/100</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-4 leading-relaxed">{review.facts.verdict}</p>
+
+                  {review.facts.flagged_claims?.length > 0 && (
+                    <div className="space-y-2">
+                      {review.facts.flagged_claims.map((fc: any, i: number) => (
+                        <div key={i} className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5 text-xs">
+                          <div className="flex items-start gap-2">
+                            <AlertTriangle size={11} className="shrink-0 mt-0.5 text-amber-500" />
+                            <div>
+                              <span className="text-amber-700 font-medium">"{fc.claim}"</span>
+                              <p className="text-gray-600 mt-1 leading-relaxed">{fc.issue}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {review.facts.flagged_claims?.length === 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+                      <CheckCircle2 size={13} /> All claims verified — no factual issues found.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CTR Variants */}
+              {review.ctr && (review.ctr.title_variants?.length > 0 || review.ctr.meta_variants?.length > 0) && (
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm font-semibold text-gray-900">CTR Optimisation</span>
+                    {(selectedTitle || selectedMeta) && (
+                      <button
+                        onClick={applyCtrVariants}
+                        disabled={applyingCtr}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {applyingCtr
+                          ? <><Loader size={13} className="animate-spin" /> Applying…</>
+                          : <><Check size={13} /> Apply to Article</>
+                        }
+                      </button>
+                    )}
+                  </div>
+
+                  {review.ctr.title_variants?.length > 0 && (
+                    <div className="mb-5">
+                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Title Variants</div>
+                      <div className="space-y-2">
+                        {review.ctr.title_variants.map((v: any, i: number) => {
+                          const isSelected = selectedTitle === v.text;
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => setSelectedTitle(isSelected ? '' : v.text)}
+                              className={`w-full text-left rounded-lg px-3 py-2.5 text-xs border transition-all ${
+                                isSelected
+                                  ? 'bg-kolet-yellow/10 border-kolet-yellow ring-1 ring-kolet-yellow'
+                                  : 'bg-stone-50 border-stone-200 hover:border-stone-400'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-gray-900 font-medium mb-0.5 leading-snug">{v.text}</p>
+                                  <p className="text-gray-500">{v.reasoning}</p>
+                                </div>
+                                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 flex items-center justify-center ${
+                                  isSelected ? 'border-kolet-yellow bg-kolet-yellow' : 'border-stone-300'
+                                }`}>
+                                  {isSelected && <Check size={9} className="text-kolet-black" />}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {review.ctr.meta_variants?.length > 0 && (
+                    <div>
+                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Meta Description Variants</div>
+                      <div className="space-y-2">
+                        {review.ctr.meta_variants.map((v: any, i: number) => {
+                          const isSelected = selectedMeta === v.text;
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => setSelectedMeta(isSelected ? '' : v.text)}
+                              className={`w-full text-left rounded-lg px-3 py-2.5 text-xs border transition-all ${
+                                isSelected
+                                  ? 'bg-kolet-yellow/10 border-kolet-yellow ring-1 ring-kolet-yellow'
+                                  : 'bg-stone-50 border-stone-200 hover:border-stone-400'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-gray-900 mb-0.5 leading-snug">{v.text}</p>
+                                  <p className="text-gray-500">{v.reasoning}</p>
+                                </div>
+                                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 flex items-center justify-center ${
+                                  isSelected ? 'border-kolet-yellow bg-kolet-yellow' : 'border-stone-300'
+                                }`}>
+                                  {isSelected && <Check size={9} className="text-kolet-black" />}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Apply fixes footer */}
+              {((review.voice?.rewrites?.length > 0) || (review.facts?.flagged_claims?.length > 0)) && (
+                <div className="px-5 py-4 bg-stone-50 flex items-center gap-3 flex-wrap">
+                  {applyError && (
+                    <span className="text-xs text-red-400 flex-1">{applyError}</span>
+                  )}
+                  <p className="text-xs text-gray-500 flex-1">
+                    {(review.voice?.rewrites?.length || 0) + (review.facts?.flagged_claims?.length || 0)} fixes available
+                    — Claude will apply them directly to the article content.
+                  </p>
+                  {review.voice?.rewrites?.length > 0 && (
+                    <button
+                      onClick={() => applyFixes(true)}
+                      disabled={applyingFixes}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-stone-300 hover:border-kolet-yellow hover:text-kolet-yellow text-gray-500 text-xs rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {applyingFixes ? <Loader size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                      Apply Voice Fixes only
+                    </button>
+                  )}
+                  <button
+                    onClick={() => applyFixes(false)}
+                    disabled={applyingFixes}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {applyingFixes
+                      ? <><Loader size={13} className="animate-spin" /> Applying…</>
+                      : <><Wand2 size={13} /> Apply All Fixes</>
+                    }
+                  </button>
+                </div>
+              )}
+
+            </div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 }

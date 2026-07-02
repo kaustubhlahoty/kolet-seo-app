@@ -59,6 +59,10 @@ export default function GeneratePage() {
   const [error, setError]           = useState("");
   const textRef = useRef<HTMLDivElement>(null);
 
+  const [linkCandidates, setLinkCandidates] = useState<{ outbound: any[]; inbound: any[] }>({ outbound: [], inbound: [] });
+  const [reviewResult, setReviewResult]     = useState<any>(null);
+  const [reviewLoading, setReviewLoading]   = useState(false);
+
   useEffect(() => {
     const t = sessionStorage.getItem("activeTopic");
     if (!t) { router.push("/ideas"); return; }
@@ -88,31 +92,60 @@ export default function GeneratePage() {
     if (!topic) return;
     setPhase("briefing");
     setError("");
+    setLinkCandidates({ outbound: [], inbound: [] });
     try {
-      const res = await fetch(`${API_BASE}/api/generate/brief`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          headline:           topic.headline,
-          focus_keyword:      topic.focus_keyword,
-          secondary_keywords: topic.secondary_keywords || [],
-          content_format:     topic.content_format,
-          kolet_angle:        topic.kolet_angle,
-          target_zone:        topic.target_zone,
-          lang:               topic.lang,
+      const [briefRes, linkRes] = await Promise.all([
+        fetch(`${API_BASE}/api/generate/brief`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            headline:           topic.headline,
+            focus_keyword:      topic.focus_keyword,
+            secondary_keywords: topic.secondary_keywords || [],
+            content_format:     topic.content_format,
+            kolet_angle:        topic.kolet_angle,
+            target_zone:        topic.target_zone,
+            lang:               topic.lang,
+          }),
         }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
+        fetch(`${API_BASE}/api/articles/link-candidates`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            headline:           topic.headline,
+            focus_keyword:      topic.focus_keyword,
+            secondary_keywords: topic.secondary_keywords || [],
+            lang:               topic.lang,
+            target_zone:        topic.target_zone,
+          }),
+        }).catch(() => null),
+      ]);
+      if (!briefRes.ok) {
+        const err = await briefRes.json();
         throw new Error(err.detail || "Brief generation failed");
       }
-      const data = await res.json();
+      const data = await briefRes.json();
       setBrief(data.brief || "");
+      if (linkRes?.ok) {
+        const linkData = await linkRes.json();
+        setLinkCandidates(linkData);
+      }
       setPhase("brief");
     } catch (e: any) {
       setError(e.message);
       setPhase("idle");
     }
+  }
+
+  async function runReview() {
+    if (!articleId) return;
+    setReviewLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${articleId}/review`, { method: "POST" });
+      const data = await res.json();
+      setReviewResult(data);
+    } catch {}
+    setReviewLoading(false);
   }
 
   async function startGeneration(withBrief?: string) {
@@ -142,34 +175,46 @@ export default function GeneratePage() {
 
       const reader  = res.body.getReader();
       const decoder = new TextDecoder();
+      let sseBuffer = "";
+
+      const handleEvent = (event: any) => {
+        if (event.type === "status") {
+          const msg = event.message.toLowerCase();
+          if (msg.includes("writing")) markStage(1);
+          if (msg.includes("saving"))  markStage(2);
+        }
+        if (event.type === "chunk") {
+          setArticleText(prev => prev + event.text);
+        }
+        if (event.type === "error") {
+          setError(event.message);
+        }
+        if (event.type === "done") {
+          setArticleId(event.article_id);
+          setStages(prev => prev.map(s => ({ ...s, active: false, done: true })));
+          setImagePrompts(event.image_prompts || []);
+          setPhase("review");
+        }
+      };
 
       while (true) {
         const { done: streamDone, value } = await reader.read();
         if (streamDone) break;
 
-        for (const line of decoder.decode(value).split("\n")) {
+        // Buffer across chunk boundaries — SSE events can be split across TCP packets
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split("\n");
+        sseBuffer = lines.pop() ?? ""; // last element may be incomplete
+
+        for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.type === "status") {
-              const msg = event.message.toLowerCase();
-              if (msg.includes("writing")) markStage(1);
-              if (msg.includes("saving"))  markStage(2);
-            }
-            if (event.type === "chunk") {
-              setArticleText(prev => prev + event.text);
-            }
-            if (event.type === "error") {
-              setError(event.message);
-            }
-            if (event.type === "done") {
-              setArticleId(event.article_id);
-              setStages(prev => prev.map(s => ({ ...s, active: false, done: true })));
-              setImagePrompts(event.image_prompts || []);
-              setPhase("review");
-            }
-          } catch { /* skip malformed */ }
+          try { handleEvent(JSON.parse(line.slice(6))); } catch { /* skip malformed */ }
         }
+      }
+
+      // Flush any remaining buffered data after stream ends
+      if (sseBuffer.startsWith("data: ")) {
+        try { handleEvent(JSON.parse(sseBuffer.slice(6))); } catch {}
       }
     } catch (e: any) {
       setError(e.message);
@@ -196,12 +241,17 @@ export default function GeneratePage() {
       const reader  = res.body.getReader();
       const decoder = new TextDecoder();
       let done_count = 0;
+      let imgBuffer = "";
 
       while (true) {
         const { done: streamDone, value } = await reader.read();
         if (streamDone) break;
 
-        for (const line of decoder.decode(value).split("\n")) {
+        imgBuffer += decoder.decode(value, { stream: true });
+        const lines = imgBuffer.split("\n");
+        imgBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           try {
             const event = JSON.parse(line.slice(6));
@@ -217,6 +267,17 @@ export default function GeneratePage() {
             }
           } catch { /* skip */ }
         }
+      }
+      // Flush remainder
+      if (imgBuffer.startsWith("data: ")) {
+        try {
+          const event = JSON.parse(imgBuffer.slice(6));
+          if (event.type === "images_done") {
+            setStages(STAGES_IMAGES.map(s => ({ ...s, active: false, done: true })));
+            if (articleId) sessionStorage.removeItem(`generating-images-${articleId}`);
+            setPhase("done");
+          }
+        } catch {}
       }
     } catch (e: any) {
       setError(e.message);
@@ -254,8 +315,8 @@ export default function GeneratePage() {
                   >
                     <span className={`text-xs px-1.5 py-0.5 rounded font-mono uppercase shrink-0 ${
                       d.match_type === "exact"
-                        ? "bg-red-900/60 text-red-400"
-                        : "bg-orange-900/40 text-orange-400"
+                        ? "bg-red-600 text-white"
+                        : "bg-amber-500 text-stone-900"
                     }`}>
                       {d.match_type}
                     </span>
@@ -310,7 +371,7 @@ export default function GeneratePage() {
             </button>
           </div>
           {error && (
-            <div className="bg-red-900/30 border border-red-800 rounded-xl p-3 text-red-300 text-xs">{error}</div>
+            <div className="bg-red-700 border border-red-800 rounded-xl p-3 text-white text-xs">{error}</div>
           )}
         </div>
       )}
@@ -359,8 +420,61 @@ export default function GeneratePage() {
               </div>
             </div>
           </div>
+
+          {/* Link candidates */}
+          {(linkCandidates.outbound.length > 0 || linkCandidates.inbound.length > 0) && (
+            <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="px-6 py-3 border-b border-stone-200">
+                <span className="text-sm font-semibold text-gray-900">Internal Linking Map</span>
+                <p className="text-xs text-gray-500 mt-0.5">Add these links in the article, then update the existing pages after publishing.</p>
+              </div>
+              <div className="p-6 space-y-5">
+                {linkCandidates.outbound.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">New article should link → to these</div>
+                    <div className="space-y-2">
+                      {linkCandidates.outbound.map((c: any) => (
+                        <div key={c.id} className="flex gap-3 items-start bg-stone-50 rounded-lg p-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-medium text-gray-800 truncate">{c.title}</div>
+                            <div className="text-xs text-kolet-yellow font-mono mt-0.5">anchor: "{c.anchor_text}"</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{c.reason}</div>
+                          </div>
+                          <button
+                            onClick={() => window.open(`/library/${c.id}`, '_blank')}
+                            className="text-xs text-gray-400 hover:text-gray-700 shrink-0 mt-0.5"
+                          >↗</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {linkCandidates.inbound.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Update these existing pages → to link back</div>
+                    <div className="space-y-2">
+                      {linkCandidates.inbound.map((c: any) => (
+                        <div key={c.id} className="flex gap-3 items-start bg-stone-50 rounded-lg p-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-medium text-gray-800 truncate">{c.title}</div>
+                            <div className="text-xs text-kolet-yellow font-mono mt-0.5">anchor: "{c.anchor_text}"</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{c.where_to_link && <span className="text-gray-400">In: {c.where_to_link} — </span>}{c.reason}</div>
+                          </div>
+                          <button
+                            onClick={() => window.open(`/library/${c.id}`, '_blank')}
+                            className="text-xs text-gray-400 hover:text-gray-700 shrink-0 mt-0.5"
+                          >↗</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {error && (
-            <div className="bg-red-900/30 border border-red-800 rounded-xl p-3 text-red-300 text-xs">{error}</div>
+            <div className="bg-red-700 border border-red-800 rounded-xl p-3 text-white text-xs">{error}</div>
           )}
         </div>
       )}
@@ -449,7 +563,7 @@ export default function GeneratePage() {
             )}
 
             {error && (
-              <div className="bg-red-900/30 border border-red-800 rounded-xl p-3 text-red-300 text-xs">{error}</div>
+              <div className="bg-red-700 border border-red-800 rounded-xl p-3 text-white text-xs">{error}</div>
             )}
           </div>
 
@@ -480,6 +594,92 @@ export default function GeneratePage() {
                 )}
               </div>
             </div>
+
+            {/* Review panel */}
+            {phase === "review" && (
+              <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+                <div className="px-5 py-3 border-b border-stone-200 flex items-center gap-2">
+                  <CheckCircle size={14} className="text-gray-500" />
+                  <span className="text-sm font-semibold text-gray-900">AI Review</span>
+                  {reviewResult && (
+                    <span className={`ml-2 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      reviewResult.overall_score >= 80 ? 'bg-emerald-600 text-white' :
+                      reviewResult.overall_score >= 60 ? 'bg-amber-500 text-stone-900' :
+                      'bg-red-600 text-white'
+                    }`}>
+                      Score: {reviewResult.overall_score}/100
+                    </span>
+                  )}
+                  <button
+                    onClick={runReview}
+                    disabled={reviewLoading}
+                    className="ml-auto flex items-center gap-1.5 text-xs px-3 py-1.5 bg-stone-100 hover:bg-stone-200 disabled:opacity-50 text-gray-600 rounded-lg transition-colors"
+                  >
+                    {reviewLoading ? <><Loader size={10} className="animate-spin" /> Reviewing…</> : 'Run Review'}
+                  </button>
+                </div>
+                {reviewResult ? (
+                  <div className="p-5 space-y-4 text-xs">
+                    {/* Voice / Tone */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-gray-700">Voice &amp; Tone</span>
+                        <span className={`font-semibold ${reviewResult.voice.score >= 80 ? 'text-emerald-600' : reviewResult.voice.score >= 60 ? 'text-amber-500' : 'text-red-600'}`}>
+                          {reviewResult.voice.score}/100
+                        </span>
+                      </div>
+                      {reviewResult.voice.verdict && <p className="text-gray-500 mb-2">{reviewResult.voice.verdict}</p>}
+                      {reviewResult.voice.ai_patterns?.length > 0 && (
+                        <div className="space-y-1">
+                          {reviewResult.voice.ai_patterns.map((p: string, i: number) => (
+                            <div key={i} className="bg-red-600 border border-red-700 rounded px-2 py-1 text-white">⚠ "{p}"</div>
+                          ))}
+                        </div>
+                      )}
+                      {reviewResult.voice.rewrites?.slice(0, 2).map((r: any, i: number) => (
+                        <div key={i} className="mt-2 rounded-lg border border-stone-200 overflow-hidden">
+                          <div className="px-3 py-2 bg-stone-50 text-gray-500 line-through">{r.original}</div>
+                          <div className="px-3 py-2 text-emerald-700">→ {r.suggestion}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Facts */}
+                    <div className="border-t border-stone-200 pt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-gray-700">Fact Check</span>
+                        <span className={`font-semibold ${reviewResult.facts.score >= 80 ? 'text-emerald-600' : reviewResult.facts.score >= 60 ? 'text-amber-500' : 'text-red-600'}`}>
+                          {reviewResult.facts.score}/100
+                        </span>
+                      </div>
+                      {reviewResult.facts.verdict && <p className="text-gray-500 mb-2">{reviewResult.facts.verdict}</p>}
+                      {reviewResult.facts.flagged_claims?.map((f: any, i: number) => (
+                        <div key={i} className="bg-amber-500 border border-amber-600 rounded px-2 py-1 text-stone-900 mb-1">
+                          ⚠ "{f.claim}" — {f.issue}
+                        </div>
+                      ))}
+                    </div>
+                    {/* CTR suggestions */}
+                    {reviewResult.ctr?.title_variants?.length > 0 && (
+                      <div className="border-t border-stone-200 pt-4">
+                        <div className="font-semibold text-gray-700 mb-2">Title Variants for CTR</div>
+                        <div className="space-y-1.5">
+                          {reviewResult.ctr.title_variants.map((v: any, i: number) => (
+                            <div key={i} className="bg-stone-50 rounded px-3 py-2">
+                              <div className="text-gray-800 font-medium">{v.text}</div>
+                              <div className="text-gray-400 mt-0.5">{v.reasoning}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-5 text-xs text-gray-500">
+                    Run the review to check voice/tone, verify Kolet facts, and get CTR-optimised title variants.
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Image prompt review */}
             {phase === "review" && imagePrompts.length > 0 && (

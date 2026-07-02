@@ -236,3 +236,46 @@ def serve_image(filename: str):
     if not path.exists():
         raise HTTPException(404, "Image not found")
     return FileResponse(path)
+
+
+def _fix_image_format(content: str) -> str:
+    """Convert broken [placeholder — desc] and [url — desc] to ![desc](placeholder/url)."""
+    # [IMAGE_PLACEHOLDER_name — description] → ![description](IMAGE_PLACEHOLDER_name)
+    content = re.sub(
+        r'\[(IMAGE_PLACEHOLDER_[\w-]+)\s*[—\-]\s*([^\]]+)\](?!\s*\()',
+        lambda m: f'![{m.group(2).strip()}]({m.group(1)})',
+        content
+    )
+    # [https://url — description] → ![description](https://url)
+    content = re.sub(
+        r'\[(https?://[^\]\s]+)\s+[—\-]\s+([^\]]+)\](?!\s*\()',
+        lambda m: f'![{m.group(2).strip()}]({m.group(1)})',
+        content
+    )
+    return content
+
+
+@router.post("/admin/fix-image-format")
+def fix_image_format_migration():
+    """One-shot migration: fix broken image markdown in all article content."""
+    conn = get_conn()
+    rows = conn.execute("SELECT id, content FROM articles WHERE content IS NOT NULL").fetchall()
+    fixed, skipped, changes = 0, 0, []
+
+    for row in rows:
+        article_id = row["id"]
+        content    = row["content"] or ""
+        if not content:
+            skipped += 1
+            continue
+        updated = _fix_image_format(content)
+        if updated == content:
+            skipped += 1
+            continue
+        conn.execute("UPDATE articles SET content = ? WHERE id = ?", (updated, article_id))
+        fixed += 1
+        changes.append({"id": article_id, "chars_before": len(content), "chars_after": len(updated)})
+
+    conn.commit()
+    conn.close()
+    return {"total": len(rows), "fixed": fixed, "skipped": skipped, "changes": changes}

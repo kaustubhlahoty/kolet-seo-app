@@ -1,15 +1,32 @@
 import { neon } from '@neondatabase/serverless';
 
 let _sql: ReturnType<typeof neon> | undefined;
+let _migrated = false;
 
 function getConnection() {
   if (!_sql) _sql = neon(process.env.DATABASE_URL!);
   return _sql;
 }
 
-// Defers neon() until the first query so importing this module is safe at build time
-export const sql = ((...args: any[]) => (getConnection() as Function).apply(null, args)) as
-  (strings: TemplateStringsArray, ...values: any[]) => Promise<any[]>;
+// Runs once per cold-start — idempotent ALTER TABLE so safe to call repeatedly
+async function ensureMigrations() {
+  if (_migrated) return;
+  _migrated = true;
+  const conn = getConnection();
+  await Promise.allSettled([
+    conn`ALTER TABLE articles ADD COLUMN IF NOT EXISTS content_format TEXT`,
+    conn`ALTER TABLE articles ADD COLUMN IF NOT EXISTS content_backup TEXT`,
+    conn`ALTER TABLE topics ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'`,
+    conn`ALTER TABLE topics ADD COLUMN IF NOT EXISTS rationale TEXT`,
+  ]);
+}
+
+// Defers neon() until the first query so importing this module is safe at build time.
+// Runs schema migrations transparently on the first call of each cold-start.
+export const sql = (async (...args: any[]) => {
+  await ensureMigrations();
+  return (getConnection() as Function).apply(null, args);
+}) as (strings: TemplateStringsArray, ...values: any[]) => Promise<any[]>;
 
 export async function initDb() {
   await sql`
@@ -59,15 +76,37 @@ export async function initDb() {
       lang TEXT,
       focus_keyword TEXT,
       target_zone TEXT,
+      content_format TEXT,
       status TEXT DEFAULT 'draft',
       content TEXT,
+      content_backup TEXT,
       meta_description TEXT,
       seo_score INTEGER,
       eeat_score INTEGER,
+      audit_report TEXT,
       images TEXT DEFAULT '[]',
       drive_url TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
       published_at TIMESTAMP
     )
   `;
+
+  // ── Idempotent migrations for existing deployments ──────────────────────
+  await Promise.allSettled([
+    // Add columns that may not exist in older deployments
+    sql`ALTER TABLE articles ADD COLUMN IF NOT EXISTS content_format TEXT`,
+    sql`ALTER TABLE articles ADD COLUMN IF NOT EXISTS content_backup TEXT`,
+    sql`ALTER TABLE topics ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'`,
+    // Indexes for common query patterns
+    sql`CREATE INDEX IF NOT EXISTS idx_articles_status_lang    ON articles(status, lang)`,
+    sql`CREATE INDEX IF NOT EXISTS idx_articles_created_at     ON articles(created_at DESC)`,
+    sql`CREATE INDEX IF NOT EXISTS idx_topics_status_lang      ON topics(status, lang)`,
+    // Deduplicate keywords then enforce uniqueness
+    sql`DELETE FROM keywords
+        WHERE id NOT IN (
+          SELECT MIN(id) FROM keywords GROUP BY seed, lang, keyword
+        )`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_unique
+        ON keywords(seed, lang, keyword)`,
+  ]);
 }

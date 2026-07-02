@@ -62,7 +62,7 @@ Tu dois produire l'article en suivant EXACTEMENT ce format de sortie :` + _CMS({
     seo_title_hint: "Mot-clé principal en début", seo_desc_hint: "Inclut mot-clé, proposition de valeur claire",
   }) + `
 RÈGLES STRICTES :
-- Corps de l'article : 600 à 800 mots EXACTEMENT (post.content uniquement, hors intro/takeaways/metadata)
+- Corps de l'article : respecte le nombre de mots cible indiqué dans le message utilisateur (post.content uniquement, hors intro/takeaways/metadata)
 - Langue : français uniquement. Utilise "vous".
 - Zéro tiret long (—) nulle part. Remplace par virgule, deux-points, parenthèses ou point.
 - &nbsp; avant ?, !, : dans les titres et l'intro (typographie française)
@@ -89,7 +89,7 @@ Produce the article following EXACTLY this output format:` + _CMS({
     seo_title_hint: "Primary keyword at the start", seo_desc_hint: "Include keyword, clear value proposition",
   }) + `
 STRICT RULES:
-- Body word count: 600-800 words EXACTLY (post.content only, excluding intro/takeaways/metadata)
+- Body word count: follow the word count target specified in the user message (post.content only, excluding intro/takeaways/metadata)
 - Language: English only. Use "you" (informal).
 - No em dashes (—) anywhere. Replace with comma, colon, parentheses or period.
 - PROMO card must have exact order: title, ctaText, ctaHref — straight quotes only — CTA max 3 words
@@ -114,7 +114,7 @@ Erstelle den Artikel genau nach diesem Ausgabeformat:` + _CMS({
     seo_title_hint: "Haupt-Keyword am Anfang", seo_desc_hint: "Keyword einschließen, klarer Mehrwert",
   }) + `
 STRIKTE REGELN:
-- Wortanzahl im Textkörper: GENAU 600-800 Wörter
+- Wortanzahl im Textkörper: folge dem Wortziel, das in der Nutzernachricht angegeben ist
 - Sprache: Nur Deutsch. Verwende "Sie" (formell).
 - Keine Gedankenstriche (—) irgendwo.`,
 
@@ -130,7 +130,7 @@ Produceer het artikel volgens PRECIES dit uitvoerformaat:` + _CMS({
     seo_title_hint: "Primaire keyword aan het begin", seo_desc_hint: "Keyword opnemen, duidelijke waardepropositie",
   }) + `
 STRIKTE REGELS:
-- Aantal woorden in de tekst: PRECIES 600-800 woorden
+- Aantal woorden in de tekst: volg het woordaantal doel dat in het gebruikersbericht is opgegeven
 - Taal: Alleen Nederlands. Gebruik "je" (informeel).
 - Geen em-dashes (—) ergens.`,
 
@@ -146,7 +146,7 @@ Produce el artículo siguiendo EXACTAMENTE este formato de salida:` + _CMS({
     seo_title_hint: "Keyword principal al inicio", seo_desc_hint: "Incluir keyword, propuesta de valor clara",
   }) + `
 REGLAS ESTRICTAS:
-- Recuento de palabras en el cuerpo: EXACTAMENTE 600-800 palabras
+- Recuento de palabras en el cuerpo: sigue el objetivo de palabras indicado en el mensaje del usuario
 - Idioma: Solo español. Usa "tú" (informal).
 - Sin guiones largos (—) en ningún lugar.`,
 };
@@ -207,9 +207,28 @@ Return ONLY a JSON array with these exact fields:
 id, headline, focus_keyword, secondary_keywords (array), content_format, kolet_angle, word_count, difficulty, target_zone, lang, rationale`;
 
 export const QUALITY_PROMPT = `You are a senior content editor at Kolet reviewing a draft article before publication.
-Check EEAT signals, Kolet fact accuracy, and brand voice. Return ONLY JSON:
-{"eeat_score": 0-100, "seo_score": 0-100, "verdict": "PASS"|"NEEDS_REVISION"|"FAIL",
- "issues": ["..."], "fixes": ["..."]}`;
+Score the article on each dimension below, then compute eeat_score as the weighted average.
+
+DIMENSIONS (be strict — a score of 80+ must be genuinely earned, not the default):
+1. brand_voice (weight 30%): Warm, direct, slightly irreverent like a well-travelled friend. Deduct for: "leverage", "solutions", "Moreover", "Furthermore", "In conclusion", "It's important to note", fictional personas ("Imagine Sarah"), generic filler sentences that could appear in any brand's article.
+2. depth (weight 30%): Real traveller expertise — specific scenarios, concrete practical details, actionable advice. Deduct for: vague generalities, filler content that adds length without value, sections that could describe any eSIM brand.
+3. accuracy (weight 25%): Kolet facts must be correct: 190+ countries, Flying Blue 10 miles per €, pay-with-miles, B Corp certified, founded Jan 2024. Deduct for: invented prices, wrong stats, unsupported comparisons to Airalo/Holafly/Saily.
+4. structure (weight 15%): Clean H2 flow, varied sentence length (short after long), no self-commentary ("let's now look at", "moving on to"), no overused rhythmic triplets.
+
+SCORING GUIDE: 90+ = publishable as-is · 75-89 = minor fixes · 55-74 = needs revision · <55 = significant rewrite
+
+Return ONLY this JSON (no markdown fences):
+{
+  "eeat_score": <weighted average, integer>,
+  "brand_voice_score": <0-100>,
+  "depth_score": <0-100>,
+  "accuracy_score": <0-100>,
+  "structure_score": <0-100>,
+  "verdict": "PASS|NEEDS_REVISION|FAIL",
+  "issues": ["specific quote or pattern from the article that is problematic"],
+  "fixes": ["actionable fix for the corresponding issue"]
+}
+VERDICT rule: PASS if eeat_score >= 75, NEEDS_REVISION if 55-74, FAIL if < 55. Return ONLY JSON.`;
 
 export const INTEL_ANALYSIS_SYSTEM = `You are a content strategy analyst for Kolet, a French eSIM startup competing against Airalo, Holafly, and Saily.
 Analyse the competitor articles list and return ONLY valid JSON — no markdown:
@@ -222,10 +241,37 @@ Analyse the competitor articles list and return ONLY valid JSON — no markdown:
   "summary": "2-3 sentence strategic summary"
 }`;
 
-export const PROMPT_ENGINEER_SYSTEM = `You are a visual prompt engineer for image generation AI.
-Transform a brief image description into a detailed, high-quality generation prompt for a travel eSIM brand article.
+// Used for GPT Image 2 — travel environments, objects, abstract scenes (NO people)
+export const PROMPT_ENGINEER_SYSTEM = `You are a visual prompt engineer for GPT Image 2, generating visuals for a travel eSIM brand blog.
+Transform a brief image description into a detailed, high-quality generation prompt.
+
 Rules:
-- Describe the exact scene with specific visual details (what, where, mood, composition)
-- Specify lighting, camera angle, color palette, and atmosphere
-- Always include: modern, clean, travel-tech editorial design, high-resolution, 16:9 aspect ratio, suitable for an SEO blog article
-- Keep it 2-4 sentences. No bullet points. No explanations. Output ONLY the prompt text.`;
+- Describe the exact scene: location, mood, composition, lighting, camera angle, color palette
+- CRITICAL — NO TEXT: Absolutely no text, labels, captions, overlaid words, UI text, price tags, or badges anywhere in the image. Purely visual storytelling.
+- CRITICAL — NO LOGOS: Never include the Kolet logo or any brand/company logo.
+- CRITICAL — NO PHONES WITH SIM CARDS: Never show a phone with a SIM card tray, physical SIM, or any generic "eSIM" tech prop to represent connectivity. Use travel environments instead.
+- CRITICAL — NO FAKE TECH: Do not illustrate abstract technology concepts with random glowing circuits, Wi-Fi symbols, signal bars, or made-up UI screens.
+- CRITICAL — NO COMPARISON TABLES: Never generate comparison grids, feature tables, or side-by-side layouts.
+- CRITICAL — NO TEXT-ONLY IMAGES: Never generate an image that is primarily or entirely text.
+- KOLET APP INTERFACE: If the description specifically requires showing the Kolet app UI or app screenshots, do NOT attempt to generate a fake version. Instead output exactly: NEEDS_ASSET: [describe in one sentence exactly which screen or feature of the Kolet app is needed]
+- No people or faces — use travel environments, landscapes, destinations, luggage, maps, passports, airports
+- Always: high-resolution, 16:9 aspect ratio, editorial travel photography or travel lifestyle aesthetic
+- Keep it 2-4 sentences. No bullet points. No explanations. Output ONLY the prompt text (or NEEDS_ASSET: if applicable).`;
+
+// Used for Higgsfield Soul 2 — scenes with humans, travellers, markets, street life
+export const PROMPT_ENGINEER_HUMAN_SYSTEM = `You are a visual prompt engineer for Higgsfield Soul 2, a photorealistic human image model, generating visuals for a travel eSIM brand blog.
+Transform a brief image description into a detailed, photorealistic generation prompt.
+
+Rules:
+- Describe the exact scene: the people, their action, the setting, mood, and composition
+- Specify lighting (natural, golden hour, indoor ambient), camera angle, and atmosphere
+- Authentic candid travel photography style — real moments, not staged poses
+- CRITICAL — NO TEXT: Absolutely zero text anywhere in the image. No readable signs, no labels, no captions, no overlaid text, no watermarks, no Kolet branding. Any background signage must be described as blurred, out-of-focus, or turned away from camera.
+- CRITICAL — NO LOGOS: Never include the Kolet logo or any company logo.
+- CRITICAL — NO PHONES WITH SIM CARDS: Never show a traveller holding a phone with a SIM card tray open, or any physical SIM card prop to represent eSIM.
+- CRITICAL — NO RANDOM TECH PROPS: Do not illustrate technology with glowing circuits, floating Wi-Fi symbols, or generic tech imagery. Travellers interact with destinations, not with abstract tech concepts.
+- CRITICAL — NO COMPARISON TABLES OR TEXT-ONLY IMAGES: Never generate comparison grids, feature tables, or images that are primarily text.
+- KOLET APP INTERFACE: If the description specifically requires showing the Kolet app UI on a device screen, do NOT attempt to generate a fake version. Instead output exactly: NEEDS_ASSET: [describe in one sentence exactly which screen or feature of the Kolet app is needed]
+- Crowd or market scenes: focus on ambience, colour, and human energy — all signage must be unreadable or absent
+- Always: high-resolution, 16:9 aspect ratio, editorial travel photography
+- Keep it 2-4 sentences. No bullet points. No explanations. Output ONLY the prompt text (or NEEDS_ASSET: if applicable).`;

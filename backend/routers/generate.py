@@ -73,7 +73,7 @@ Tu dois produire l'article en suivant EXACTEMENT ce format de sortie :
     title_hint="Titre court, percutant, mot-clé inclus, 8 mots MAX, zéro tiret long",
     intro_hint="Accroche immédiate. Pas de préambule générique. Le lecteur comprend l'angle dès les 2 premières phrases.",
     cover_hint="description du visuel souhaité",
-    content_hint="3 à 5 sections ## avec prose + image placeholder après chaque section\n[Au moins un scénario de voyage concret en \"vous\" — spécifique, pas générique]\n[La section à ~60% de l'article doit être plus courte/différente des autres — le \"jolt\"]",
+    content_hint="3 à 5 sections ## avec prose + image après chaque section AU FORMAT MARKDOWN : ![description du visuel](IMAGE_PLACEHOLDER_nom-section)\n[Au moins un scénario de voyage concret en \"vous\" — spécifique, pas générique]\n[La section à ~60% de l'article doit être plus courte/différente des autres — le \"jolt\"]",
     promo_title="Vous partez bientôt ?",
     promo_cta="Voir les forfaits",
     promo_href="/forfaits",
@@ -82,6 +82,7 @@ Tu dois produire l'article en suivant EXACTEMENT ce format de sortie :
     seo_desc_hint="Inclut mot-clé, proposition de valeur claire",
 ) + """
 RÈGLES STRICTES :
+- Images dans POST CONTENT : TOUJOURS au format markdown `![description](IMAGE_PLACEHOLDER_nom)` — JAMAIS `[IMAGE_PLACEHOLDER_nom — description]`
 - Corps de l'article : 600 à 800 mots EXACTEMENT (post.content uniquement, hors intro/takeaways/metadata)
 - Langue : français uniquement. Utilise "vous".
 - Zéro tiret long (—) nulle part. Remplace par virgule, deux-points, parenthèses ou point.
@@ -104,7 +105,7 @@ Produce the article following EXACTLY this output format:
     title_hint="Short, punchy title, keyword included, 8 words MAX, no em dashes",
     intro_hint="Immediate hook. No generic preamble. Reader understands the angle within the first 2 sentences.",
     cover_hint="description of the desired visual",
-    content_hint="3 to 5 ## sections with prose + image placeholder after each section\n[At least one concrete travel scenario in \"you\" — specific, not generic]\n[The section at ~60% of the article should be shorter/different from the others — the \"jolt\"]",
+    content_hint="3 to 5 ## sections with prose + image after each section IN MARKDOWN FORMAT: ![visual description](IMAGE_PLACEHOLDER_section-name)\n[At least one concrete travel scenario in \"you\" — specific, not generic]\n[The section at ~60% of the article should be shorter/different from the others — the \"jolt\"]",
     promo_title="Travelling soon?",
     promo_cta="See plans",
     promo_href="/plans",
@@ -113,6 +114,7 @@ Produce the article following EXACTLY this output format:
     seo_desc_hint="Include keyword, clear value proposition",
 ) + """
 STRICT RULES:
+- Images inside POST CONTENT: ALWAYS use markdown format `![description](IMAGE_PLACEHOLDER_name)` — NEVER `[IMAGE_PLACEHOLDER_name — description]`
 - Body word count: 600-800 words EXACTLY (post.content only, excluding intro/takeaways/metadata)
 - Language: English only. Use "you" (informal).
 - No em dashes (—) anywhere. Replace with comma, colon, parentheses or period.
@@ -135,7 +137,7 @@ Erstelle den Artikel genau nach diesem Ausgabeformat:
     title_hint="Kurzer, prägnanter Titel, Keyword enthalten, max. 8 Wörter, keine Gedankenstriche",
     intro_hint="Sofortiger Einstieg. Kein generischer Vorspann. Der Leser versteht den Winkel innerhalb der ersten 2 Sätze.",
     cover_hint="Beschreibung des gewünschten Visuals",
-    content_hint="3 bis 5 ## Abschnitte mit Fließtext + Bild-Platzhalter nach jedem Abschnitt\n[Mindestens ein konkretes Reiseszenario in \"Sie\" — spezifisch, nicht generisch]\n[Der Abschnitt bei ~60% des Artikels sollte kürzer/anders sein als die anderen — der \"Jolt\"]",
+    content_hint="3 bis 5 ## Abschnitte mit Fließtext + Bild nach jedem Abschnitt IM MARKDOWN-FORMAT: ![Bildbeschreibung](IMAGE_PLACEHOLDER_abschnittsname)\n[Mindestens ein konkretes Reiseszenario in \"Sie\" — spezifisch, nicht generisch]\n[Der Abschnitt bei ~60% des Artikels sollte kürzer/anders sein als die anderen — der \"Jolt\"]",
     promo_title="Bald auf Reisen?",
     promo_cta="Pläne ansehen",
     promo_href="/plaene",
@@ -144,6 +146,7 @@ Erstelle den Artikel genau nach diesem Ausgabeformat:
     seo_desc_hint="Keyword einschließen, klarer Mehrwert",
 ) + """
 STRIKTE REGELN:
+- Bilder in POST CONTENT: IMMER Markdown-Format `![Beschreibung](IMAGE_PLACEHOLDER_Name)` — NIEMALS `[IMAGE_PLACEHOLDER_Name — Beschreibung]`
 - Wortanzahl im Textkörper: GENAU 600-800 Wörter (nur post.content, ohne Intro/Takeaways/Metadata)
 - Sprache: Nur Deutsch. Verwende "Sie" (formell).
 - Keine Gedankenstriche (—) irgendwo. Ersetze durch Komma, Doppelpunkt, Klammern oder Punkt.
@@ -165,7 +168,7 @@ Produceer het artikel volgens PRECIES dit uitvoerformaat:
     title_hint="Korte, pakkende titel, keyword inbegrepen, max. 8 woorden, geen em-dashes",
     intro_hint="Directe opening. Geen generieke inleiding. De lezer begrijpt de invalshoek binnen de eerste 2 zinnen.",
     cover_hint="beschrijving van het gewenste beeld",
-    content_hint="3 tot 5 ## secties met proza + afbeeldingsplaatshouder na elke sectie\n[Minimaal één concreet reisscenario in \"je\" — specifiek, niet generiek]\n[De sectie op ~60% van het artikel moet korter/anders zijn dan de andere — de \"jolt\"]",
+    content_hint="3 tot 5 ## secties met proza + afbeelding na elke sectie IN MARKDOWN-FORMAAT: ![beschrijving](IMAGE_PLACEHOLDER_sectienaam)\n[Minimaal één concreet reisscenario in \"je\" — specifiek, niet generiek]\n[De sectie op ~60% van het artikel moet korter/anders zijn dan de andere — de \"jolt\"]",
     promo_title="Binnenkort op reis?",
     promo_cta="Bekijk plannen",
     promo_href="/plannen",
@@ -174,6 +177,7 @@ Produceer het artikel volgens PRECIES dit uitvoerformaat:
     seo_desc_hint="Keyword opnemen, duidelijke waardepropositie",
 ) + """
 STRIKTE REGELS:
+- Afbeeldingen in POST CONTENT: ALTIJD markdown-formaat `![beschrijving](IMAGE_PLACEHOLDER_naam)` — NOOIT `[IMAGE_PLACEHOLDER_naam — beschrijving]`
 - Aantal woorden in de tekst: PRECIES 600-800 woorden (alleen post.content, zonder intro/takeaways/metadata)
 - Taal: Alleen Nederlands. Gebruik "je" (informeel).
 - Geen em-dashes (—) ergens. Vervang door komma, dubbele punt, haakjes of punt.
@@ -195,7 +199,7 @@ Produce el artículo siguiendo EXACTAMENTE este formato de salida:
     title_hint="Título corto e impactante, keyword incluida, máx. 8 palabras, sin guiones largos",
     intro_hint="Enganche inmediato. Sin preámbulo genérico. El lector entiende el ángulo en las primeras 2 frases.",
     cover_hint="descripción del visual deseado",
-    content_hint="3 a 5 secciones ## con prosa + marcador de imagen después de cada sección\n[Al menos un escenario de viaje concreto en \"tú\" — específico, no genérico]\n[La sección al ~60% del artículo debe ser más corta/diferente — el \"jolt\"]",
+    content_hint="3 a 5 secciones ## con prosa + imagen después de cada sección EN FORMATO MARKDOWN: ![descripción visual](IMAGE_PLACEHOLDER_nombre-sección)\n[Al menos un escenario de viaje concreto en \"tú\" — específico, no genérico]\n[La sección al ~60% del artículo debe ser más corta/diferente — el \"jolt\"]",
     promo_title="¿Viajando pronto?",
     promo_cta="Ver planes",
     promo_href="/planes",
@@ -204,6 +208,7 @@ Produce el artículo siguiendo EXACTAMENTE este formato de salida:
     seo_desc_hint="Incluir keyword, propuesta de valor clara",
 ) + """
 REGLAS ESTRICTAS:
+- Imágenes en POST CONTENT: SIEMPRE formato markdown `![descripción](IMAGE_PLACEHOLDER_nombre)` — NUNCA `[IMAGE_PLACEHOLDER_nombre — descripción]`
 - Recuento de palabras en el cuerpo: EXACTAMENTE 600-800 palabras (solo post.content, sin intro/takeaways/metadata)
 - Idioma: Solo español. Usa "tú" (informal).
 - Sin guiones largos (—) en ningún lugar. Reemplaza con coma, dos puntos, paréntesis o punto.

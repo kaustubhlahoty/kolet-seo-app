@@ -8,13 +8,13 @@ export async function GET(request: Request) {
 
   let rows;
   if (status && lang) {
-    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,images,drive_url,created_at,published_at FROM articles WHERE status=${status} AND lang=${lang} ORDER BY created_at DESC`;
+    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,audit_report,images,drive_url,created_at,published_at FROM articles WHERE status=${status} AND lang=${lang} ORDER BY created_at DESC`;
   } else if (status) {
-    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,images,drive_url,created_at,published_at FROM articles WHERE status=${status} ORDER BY created_at DESC`;
+    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,audit_report,images,drive_url,created_at,published_at FROM articles WHERE status=${status} ORDER BY created_at DESC`;
   } else if (lang) {
-    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,images,drive_url,created_at,published_at FROM articles WHERE lang=${lang} ORDER BY created_at DESC`;
+    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,audit_report,images,drive_url,created_at,published_at FROM articles WHERE lang=${lang} ORDER BY created_at DESC`;
   } else {
-    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,images,drive_url,created_at,published_at FROM articles ORDER BY created_at DESC`;
+    rows = await sql`SELECT id,topic_id,title,slug,lang,focus_keyword,target_zone,status,meta_description,seo_score,eeat_score,audit_report,images,drive_url,created_at,published_at FROM articles ORDER BY created_at DESC`;
   }
   return NextResponse.json({ articles: rows });
 }

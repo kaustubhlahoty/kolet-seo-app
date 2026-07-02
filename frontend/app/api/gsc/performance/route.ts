@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     const auth = new google.auth.GoogleAuth({ credentials: keyFile, scopes: ['https://www.googleapis.com/auth/webmasters.readonly'] });
     const sc = google.searchconsole({ version: 'v1', auth });
 
-    const end   = new Date(); end.setDate(end.getDate());
+    const end   = new Date();
     const start = new Date(); start.setDate(start.getDate() - days);
 
     const resp = await sc.searchanalytics.query({
