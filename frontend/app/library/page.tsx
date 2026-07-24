@@ -4,7 +4,8 @@ import { API_BASE } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import {
   BookOpen, Search, ExternalLink, CheckCircle, AlertCircle,
-  Clock, Loader, Globe, Eye, Trash2, FileText, X, TrendingUp, BarChart2, Wand2, Languages
+  Clock, Loader, Globe, Eye, Trash2, FileText, X, TrendingUp, BarChart2, Wand2, Languages, MessageSquare,
+  ChevronDown, ChevronUp
 } from "lucide-react";
 
 type Article = {
@@ -142,6 +143,18 @@ export default function LibraryPage() {
   const [translating, setTranslating] = useState<string | null>(null);
   const [translateTarget, setTranslateTarget] = useState<Record<string, string>>({});
   const [translateError, setTranslateError] = useState<string | null>(null);
+  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
+  const [expandedAudits, setExpandedAudits] = useState<Set<string>>(new Set());
+  const [markPublishId, setMarkPublishId] = useState<string | null>(null);
+  const [markLiveUrl, setMarkLiveUrl]     = useState("");
+
+  function toggleAudit(id: string) {
+    setExpandedAudits(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
 
   const fetchArticles = useCallback(async () => {
     try {
@@ -159,6 +172,17 @@ export default function LibraryPage() {
         }
       }
       setAuditResults(prev => ({ ...prev, ...persisted }));
+      // Fetch unresolved comment counts for all articles
+      const counts: Record<string, number> = {};
+      await Promise.all(data.articles.map(async (a: Article) => {
+        try {
+          const cr = await fetch(`${API_BASE}/api/articles/${a.id}/comments`);
+          const cd = await cr.json();
+          const open = (cd.comments || []).filter((c: any) => !c.resolved).length;
+          if (open > 0) counts[a.id] = open;
+        } catch {}
+      }));
+      setCommentCounts(counts);
     } catch { /* ignore */ }
     setLoading(false);
   }, [filterStatus, filterLang]);
@@ -198,6 +222,7 @@ export default function LibraryPage() {
       const res = await fetch(`${API_BASE}/api/articles/${id}/audit`, { method: "POST" });
       const data = await res.json();
       setAuditResults(prev => ({ ...prev, [id]: data }));
+      setExpandedAudits(prev => new Set([...prev, id]));
       fetchArticles();
     } catch { /* ignore */ }
     setAuditing(null);
@@ -228,16 +253,19 @@ export default function LibraryPage() {
     }
   }
 
-  async function publish(id: string) {
+  async function publish(id: string, live_url: string) {
     setPublishing(id);
     setPublishError(null);
     try {
-      const r = await fetch(`${API_BASE}/api/articles/${id}/publish`, { method: "POST" });
+      const r = await fetch(`${API_BASE}/api/articles/${id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ live_url }),
+      });
       const data = await r.json();
-      if (!r.ok) {
-        setPublishError(data.error ?? 'Publish failed');
-        return;
-      }
+      if (!r.ok) { setPublishError(data.error ?? 'Publish failed'); return; }
+      setMarkPublishId(null);
+      setMarkLiveUrl("");
       fetchArticles();
     } catch (e: any) {
       setPublishError(e.message);
@@ -529,6 +557,11 @@ export default function LibraryPage() {
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-sm">{LANG_FLAGS[article.lang] || "🌐"}</span>
                         <h3 className="text-sm font-semibold text-gray-900 truncate">{article.title || "Untitled"}</h3>
+                        {commentCounts[article.id] && (
+                          <span className="shrink-0 flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-orange-500 text-white font-semibold">
+                            <MessageSquare size={9} /> {commentCounts[article.id]}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mb-2">
                         <span className={`text-xs px-2 py-0.5 rounded-full border flex items-center gap-1 ${cfg.color}`}>
@@ -590,6 +623,15 @@ export default function LibraryPage() {
                           Audit
                         </button>
                       )}
+                      {auditResults[article.id] && (
+                        <button
+                          onClick={() => toggleAudit(article.id)}
+                          title={expandedAudits.has(article.id) ? "Collapse audit" : "Expand audit"}
+                          className="text-xs px-2 py-1.5 border border-stone-300 hover:border-stone-400 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          {expandedAudits.has(article.id) ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                        </button>
+                      )}
                       {article.status === "needs_revision" && (
                         <button
                           onClick={() => runRewrite(article.id, auditResults[article.id] ?? { issues: [], fixes: [], seo_checks: {}, seo_score: 0, eeat_score: null, verdict: "FAIL", brand_voice_score: null, depth_score: null, accuracy_score: null, structure_score: null })}
@@ -600,14 +642,12 @@ export default function LibraryPage() {
                           Rewrite
                         </button>
                       )}
-                      {article.status === "reviewed" && (
+                      {article.status !== "published" && markPublishId !== article.id && (
                         <button
-                          onClick={() => publish(article.id)}
-                          disabled={publishing === article.id}
-                          className="text-xs px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded-lg text-white transition-colors flex items-center gap-1 disabled:opacity-60"
+                          onClick={() => { setMarkPublishId(article.id); setMarkLiveUrl(""); }}
+                          className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-white transition-colors flex items-center gap-1"
                         >
-                          {publishing === article.id ? <Loader size={10} className="animate-spin" /> : null}
-                          Publish
+                          <CheckCircle size={10} /> Mark published
                         </button>
                       )}
                       {article.drive_url && (
@@ -646,8 +686,44 @@ export default function LibraryPage() {
                     </div>
                   </div>
 
-                  {/* Audit result panel — shown if audit was run (persisted in DB or just run this session) */}
-                  {auditResults[article.id] && (() => {
+                  {/* Inline "mark as published" URL form */}
+                  {/* Inline publish form */}
+                  {markPublishId === article.id && (
+                    <div className="mt-4 pt-4 border-t border-stone-200">
+                      <p className="text-xs text-gray-500 mb-2">Paste the live article URL — it will be included in the Slack review request alongside the Kolet SEO link.</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          autoFocus
+                          type="url"
+                          value={markLiveUrl}
+                          onChange={e => setMarkLiveUrl(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") publish(article.id, markLiveUrl.trim());
+                            if (e.key === "Escape") { setMarkPublishId(null); setMarkLiveUrl(""); }
+                          }}
+                          placeholder="https://kolet.com/en/article-slug"
+                          className="flex-1 bg-white border border-stone-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-emerald-500"
+                        />
+                        <button
+                          onClick={() => publish(article.id, markLiveUrl.trim())}
+                          disabled={publishing === article.id}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          {publishing === article.id ? <Loader size={11} className="animate-spin" /> : <CheckCircle size={11} />}
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => { setMarkPublishId(null); setMarkLiveUrl(""); }}
+                          className="px-3 py-1.5 border border-stone-300 hover:border-stone-400 text-gray-500 text-xs rounded-lg transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Audit result panel — collapsible, shown only when expanded */}
+                  {auditResults[article.id] && expandedAudits.has(article.id) && (() => {
                     const ar = auditResults[article.id];
                     return (
                       <div className="mt-4 pt-4 border-t border-stone-200 space-y-3">

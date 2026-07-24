@@ -53,7 +53,7 @@ export async function GET() {
     // Claude gives a concrete fix for each near-miss
     const ac  = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const msg = await ac.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'claude-sonnet-4-6',
       max_tokens: 2000,
       messages: [{
         role: 'user',

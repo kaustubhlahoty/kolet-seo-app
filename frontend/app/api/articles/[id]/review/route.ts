@@ -63,7 +63,7 @@ async function reviewFacts(content: string, lang: string, targetZone?: string): 
   const knowledge   = getKoletKnowledgeFull();
   const livePricing = await getPricingContext(targetZone).catch(() => '');
   const msg = await ac.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1000,
     messages: [{
       role: 'user',
@@ -105,7 +105,7 @@ async function reviewCTR(title: string, seoTitle: string, seoDesc: string, focus
   snippet_tips: string[];
 }> {
   const msg = await ac.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1200,
     messages: [{
       role: 'user',

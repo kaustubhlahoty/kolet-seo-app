@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send } from "lucide-react";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -216,6 +216,80 @@ function ContentField({
   );
 }
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type Comment = {
+  id: string;
+  article_id: string;
+  author: string;
+  body: string;
+  quote: string;
+  created_at: string;
+  resolved: boolean;
+  resolved_at: string | null;
+  parent_id: string | null;
+};
+
+// ── Quote highlight helpers ───────────────────────────────────────────────────
+
+type Segment = { text: string; comment: Comment | null };
+
+function segmentText(text: string, comments: Comment[]): Segment[] {
+  const candidates = comments.filter(c => c.quote?.trim() && text.includes(c.quote.trim()));
+  if (!candidates.length) return [{ text, comment: null }];
+
+  const marks: Array<{ start: number; end: number; comment: Comment }> = [];
+  for (const c of candidates) {
+    const q = c.quote.trim();
+    let idx = text.indexOf(q);
+    while (idx !== -1) {
+      marks.push({ start: idx, end: idx + q.length, comment: c });
+      idx = text.indexOf(q, idx + 1);
+    }
+  }
+  marks.sort((a, b) => a.start - b.start);
+
+  const segments: Segment[] = [];
+  let cursor = 0;
+  for (const mark of marks) {
+    if (mark.start < cursor) continue; // skip overlaps
+    if (mark.start > cursor) segments.push({ text: text.slice(cursor, mark.start), comment: null });
+    segments.push({ text: text.slice(mark.start, mark.end), comment: mark.comment });
+    cursor = mark.end;
+  }
+  if (cursor < text.length) segments.push({ text: text.slice(cursor), comment: null });
+  return segments;
+}
+
+function HighlightedText({
+  text, comments, onEnter, onLeave,
+}: {
+  text: string;
+  comments: Comment[];
+  onEnter: (c: Comment, rect: DOMRect) => void;
+  onLeave: () => void;
+}) {
+  const segments = segmentText(text, comments);
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.comment ? (
+          <mark
+            key={i}
+            className="bg-kolet-yellow/30 border-b-2 border-kolet-yellow/70 rounded-sm cursor-default not-italic"
+            onMouseEnter={e => onEnter(seg.comment!, (e.currentTarget as HTMLElement).getBoundingClientRect())}
+            onMouseLeave={onLeave}
+          >
+            {seg.text}
+          </mark>
+        ) : (
+          <span key={i}>{seg.text}</span>
+        )
+      )}
+    </>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ArticleDetailPage() {
@@ -248,6 +322,26 @@ export default function ArticleDetailPage() {
   const [editing, setEditing]           = useState(false);
   const [editError, setEditError]       = useState('');
   const [editSuccess, setEditSuccess]   = useState(false);
+  // Comments
+  const [comments, setComments]         = useState<Comment[]>([]);
+  const [commentAuthor, setCommentAuthor] = useState('');
+  const [commentBody, setCommentBody]   = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [showResolved, setShowResolved] = useState(false);
+  // Replies
+  const [replyingTo, setReplyingTo]     = useState<string | null>(null);
+  const [replyBody, setReplyBody]       = useState('');
+  const [replySubmitting, setReplySubmitting] = useState(false);
+  // Comment hover popover
+  const [hoverComment, setHoverComment] = useState<Comment | null>(null);
+  const [hoverRect, setHoverRect]       = useState<DOMRect | null>(null);
+  // Review mode (inline highlighting)
+  const [reviewMode, setReviewMode]     = useState(false);
+  const [selectionPos, setSelectionPos] = useState<{ x: number; y: number } | null>(null);
+  const [pendingQuote, setPendingQuote] = useState('');
+  const [showInlineForm, setShowInlineForm] = useState(false);
+  const reviewRef = useRef<HTMLDivElement>(null);
+  const inlineFormRef = useRef<HTMLDivElement>(null);
   // Content save state
   const [isDirty, setIsDirty]           = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
@@ -262,6 +356,7 @@ export default function ArticleDetailPage() {
   const liveContentRef = useRef('');
   const serpTitleRef   = useRef('');
   const serpDescRef    = useRef('');
+  const urlMapRef      = useRef<Record<string, string>>({});
   const sectionsRef    = useRef<ReturnType<typeof parseArticle>>({ title: '', readTime: '', intro: '', keyTakeaways: '', content: '', seoTitle: '', seoDescription: '' });
 
   function applyImages(images: any) {
@@ -315,6 +410,112 @@ export default function ArticleDetailPage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [id]);
 
+  // Fetch comments — auto-enable review mode if any open comment has a quoted passage
+  useEffect(() => {
+    fetch(`${API_BASE}/api/articles/${id}/comments`)
+      .then(r => r.json())
+      .then(d => {
+        const fetched: Comment[] = d.comments || [];
+        setComments(fetched);
+        const hasHighlights = fetched.some(c => !c.resolved && !c.parent_id && c.quote?.trim());
+        if (hasHighlights) setReviewMode(true);
+      })
+      .catch(() => {});
+  }, [id]);
+
+  // In review mode, clear the floating button when the user's selection collapses
+  useEffect(() => {
+    if (!reviewMode) return;
+    function onGlobalMouseUp() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        if (!showInlineForm) setSelectionPos(null);
+      }
+    }
+    document.addEventListener('mouseup', onGlobalMouseUp);
+    return () => document.removeEventListener('mouseup', onGlobalMouseUp);
+  }, [reviewMode, showInlineForm]);
+
+  // Dismiss the floating inline form when clicking outside it
+  useEffect(() => {
+    if (!showInlineForm) return;
+    function onMouseDown(e: MouseEvent) {
+      if (inlineFormRef.current && !inlineFormRef.current.contains(e.target as Node)) {
+        dismissInlineComment();
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [showInlineForm]);
+
+  async function submitComment(quote = '') {
+    if (!commentBody.trim()) return;
+    setCommentSubmitting(true);
+    const res = await fetch(`${API_BASE}/api/articles/${id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: commentAuthor, body: commentBody, quote }),
+    });
+    const d = await res.json();
+    if (d.comment) { setComments(prev => [...prev, d.comment]); setCommentBody(''); }
+    setCommentSubmitting(false);
+  }
+
+  async function resolveComment(commentId: string, resolved: boolean) {
+    const res = await fetch(`${API_BASE}/api/articles/${id}/comments/${commentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolved }),
+    });
+    const d = await res.json();
+    if (d.comment) setComments(prev => prev.map(c => c.id === commentId ? d.comment : c));
+  }
+
+  async function submitReply(parentId: string) {
+    if (!replyBody.trim()) return;
+    setReplySubmitting(true);
+    const res = await fetch(`${API_BASE}/api/articles/${id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: commentAuthor, body: replyBody, parent_id: parentId }),
+    });
+    const d = await res.json();
+    if (d.comment) {
+      setComments(prev => [...prev, d.comment]);
+      setReplyBody('');
+      setReplyingTo(null);
+    }
+    setReplySubmitting(false);
+  }
+
+  function handleReviewMouseUp() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    setSelectionPos({ x: rect.left + rect.width / 2, y: rect.top });
+    setShowInlineForm(false);
+  }
+
+  function openInlineForm() {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? '';
+    setPendingQuote(text);
+    setShowInlineForm(true);
+  }
+
+  function dismissInlineComment() {
+    setSelectionPos(null);
+    setShowInlineForm(false);
+    setPendingQuote('');
+    setCommentBody('');
+  }
+
+  async function submitInlineComment() {
+    await submitComment(pendingQuote);
+    dismissInlineComment();
+  }
+
   // Auto-save urlMap to DB whenever it changes (skip the initial populate from DB)
   useEffect(() => {
     if (isFirstLoad.current) { isFirstLoad.current = false; return; }
@@ -346,6 +547,7 @@ export default function ArticleDetailPage() {
   useEffect(() => { rawContentRef.current = rawContent; sectionsRef.current = sections; }, [rawContent, sections]);
   useEffect(() => { serpTitleRef.current = serpTitle; }, [serpTitle]);
   useEffect(() => { serpDescRef.current = serpDesc; }, [serpDesc]);
+  useEffect(() => { urlMapRef.current = urlMap; }, [urlMap]);
 
   // Reset dirty tracking when AI rewrites the content
   useEffect(() => {
@@ -385,8 +587,15 @@ export default function ArticleDetailPage() {
     try {
       let updatedRaw = rawContentRef.current;
 
-      const liveBody = liveContentRef.current;
-      if (liveBody) updatedRaw = replaceContentBody(updatedRaw, liveBody);
+      let liveBody = liveContentRef.current;
+      if (liveBody) {
+        // Restore placeholders — ContentField displays URLs in place of placeholders,
+        // but rawContent must always store placeholder names (URLs live in the images column).
+        for (const [ph, url] of Object.entries(urlMapRef.current)) {
+          if (url) liveBody = liveBody.split(url).join(ph);
+        }
+        updatedRaw = replaceContentBody(updatedRaw, liveBody);
+      }
 
       const title = serpTitleRef.current;
       const desc  = serpDescRef.current;
@@ -651,6 +860,18 @@ export default function ArticleDetailPage() {
           <span className="text-sm text-gray-500 truncate max-w-xs">{meta.title}</span>
         </>}
 
+        <button
+          onClick={() => { setReviewMode(v => !v); dismissInlineComment(); }}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+            reviewMode
+              ? 'bg-orange-500/10 border-orange-400 text-orange-600'
+              : 'border-stone-300 text-gray-500 hover:border-stone-400 hover:text-gray-700'
+          }`}
+        >
+          <MessageSquare size={11} />
+          {reviewMode ? 'Exit Review' : 'Review Mode'}
+        </button>
+
         <div className="ml-auto flex items-center gap-2.5">
           {saveError && <span className="text-xs text-red-400">{saveError}</span>}
           {isSaving && (
@@ -683,6 +904,143 @@ export default function ArticleDetailPage() {
           Images are generating in the background — this page will update automatically when ready.
         </div>
       )}
+
+      {/* Review Mode — readable prose with inline text selection */}
+      {reviewMode && (() => {
+        const openQuoted = comments.filter(c => !c.resolved && !c.parent_id);
+        const hoverHandlers = {
+          onEnter: (c: Comment, rect: DOMRect) => { setHoverComment(c); setHoverRect(rect); },
+          onLeave: () => { setHoverComment(null); setHoverRect(null); },
+        };
+        return (
+          <div
+            ref={reviewRef}
+            onMouseUp={handleReviewMouseUp}
+            className="mb-6 bg-white border-2 border-orange-200 rounded-xl p-8 shadow-sm cursor-text select-text"
+          >
+            <div className="flex items-center gap-2 mb-6 text-xs text-orange-600 font-semibold">
+              <MessageSquare size={13} />
+              Review mode — select any text and click Comment to flag a change
+            </div>
+            {sections.title && (
+              <h1 className="text-2xl font-bold text-gray-900 mb-5 leading-tight">{sections.title}</h1>
+            )}
+            {sections.intro && (
+              <div className="text-gray-600 text-base leading-relaxed mb-6 border-l-4 border-kolet-yellow pl-4">
+                <HighlightedText text={sections.intro} comments={openQuoted} {...hoverHandlers} />
+              </div>
+            )}
+            {sections.keyTakeaways && (
+              <div className="mb-6">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Key Takeaways</p>
+                <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
+                  <HighlightedText text={sections.keyTakeaways} comments={openQuoted} {...hoverHandlers} />
+                </pre>
+              </div>
+            )}
+            <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7">
+              <HighlightedText text={sections.content} comments={openQuoted} {...hoverHandlers} />
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Comment hover popover */}
+      {hoverComment && hoverRect && (() => {
+        const above = hoverRect.top > 140;
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              left: Math.max(148, Math.min(hoverRect.left + hoverRect.width / 2, window.innerWidth - 148)),
+              top: above ? hoverRect.top - 10 : hoverRect.bottom + 10,
+              transform: `translateX(-50%)${above ? ' translateY(-100%)' : ''}`,
+              zIndex: 9999,
+            }}
+            className="w-72 bg-gray-900 text-white rounded-xl shadow-2xl p-3.5 pointer-events-none"
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-xs font-semibold">{hoverComment.author}</span>
+              <span className="text-xs text-gray-400">
+                {new Date(hoverComment.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+              </span>
+            </div>
+            <p className="text-xs leading-relaxed text-gray-200 whitespace-pre-wrap">{hoverComment.body}</p>
+            {/* Arrow */}
+            <div
+              className="absolute left-1/2 w-2 h-2 bg-gray-900 rotate-45"
+              style={{ [above ? 'bottom' : 'top']: -4, transform: 'translateX(-50%) rotate(45deg)' }}
+            />
+          </div>
+        );
+      })()}
+
+      {/* Floating selection comment button */}
+      {selectionPos && !showInlineForm && (
+        <button
+          onMouseDown={e => e.preventDefault()}
+          onClick={openInlineForm}
+          style={{ position: 'fixed', left: selectionPos.x, top: selectionPos.y - 40, transform: 'translateX(-50%)', zIndex: 9999 }}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-700 text-white text-xs font-semibold rounded-full shadow-lg transition-colors"
+        >
+          <MessageSquare size={11} /> Comment
+        </button>
+      )}
+
+      {/* Floating inline comment form */}
+      {showInlineForm && selectionPos && (() => {
+        const FORM_W = 288; // w-72
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+        const safeLeft = Math.max(FORM_W / 2 + 12, Math.min(selectionPos.x, vw - FORM_W / 2 - 12));
+        const safeTop  = Math.max(12, Math.min(selectionPos.y - 8, vh - 280));
+        return (
+        <div
+          ref={inlineFormRef}
+          style={{ position: 'fixed', left: safeLeft, top: safeTop, transform: 'translateX(-50%)', zIndex: 9999 }}
+          className="w-72 bg-white border border-stone-300 rounded-xl shadow-2xl p-4 space-y-3"
+        >
+          {pendingQuote && (
+            <div className="text-xs text-gray-600 bg-kolet-yellow/10 border-l-2 border-kolet-yellow px-3 py-2 rounded-r-md leading-relaxed italic break-words">
+              &ldquo;{pendingQuote.length > 120 ? pendingQuote.slice(0, 117) + '…' : pendingQuote}&rdquo;
+            </div>
+          )}
+          <input
+            value={commentAuthor}
+            onChange={e => setCommentAuthor(e.target.value)}
+            placeholder="Your name (optional)"
+            className="w-full text-xs bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 focus:outline-none focus:border-kolet-yellow transition-colors"
+          />
+          <textarea
+            value={commentBody}
+            onChange={e => setCommentBody(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitInlineComment(); }}
+            placeholder="Describe the change needed…"
+            rows={3}
+            autoFocus
+            className="w-full text-xs bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 focus:outline-none focus:border-kolet-yellow transition-colors resize-none"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onMouseDown={e => e.preventDefault()}
+              onClick={dismissInlineComment}
+              className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onMouseDown={e => e.preventDefault()}
+              onClick={submitInlineComment}
+              disabled={commentSubmitting || !commentBody.trim()}
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
+            >
+              {commentSubmitting ? <Loader size={11} className="animate-spin" /> : <Send size={11} />}
+              {commentSubmitting ? 'Posting…' : 'Post'}
+            </button>
+          </div>
+        </div>
+        );
+      })()}
 
       <div className="grid grid-cols-3 gap-6 items-start">
 
@@ -915,6 +1273,205 @@ export default function ArticleDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Comments Panel ── */}
+      {(() => {
+        const topLevel = comments.filter(c => !c.parent_id);
+        const replies  = comments.filter(c => !!c.parent_id);
+        const open     = topLevel.filter(c => !c.resolved);
+        const resolved = topLevel.filter(c => c.resolved);
+        return (
+          <div className="mt-6">
+            <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
+              {/* Header */}
+              <div className="px-5 py-4 border-b border-stone-200 flex items-center gap-3">
+                <MessageSquare size={16} className="text-kolet-yellow" />
+                <h2 className="text-sm font-semibold text-gray-900">Review Comments</h2>
+                {open.length > 0 && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500 text-white font-semibold">{open.length} open</span>
+                )}
+              </div>
+
+              <div className="p-5 space-y-4">
+                {/* Open comment threads */}
+                {open.length === 0 && resolved.length === 0 && (
+                  <p className="text-xs text-gray-400">No comments yet. Use the form below to flag a change without editing the article directly.</p>
+                )}
+                {open.map(c => {
+                  const threadReplies = replies.filter(r => r.parent_id === c.id);
+                  const isReplying = replyingTo === c.id;
+                  return (
+                    <div key={c.id} className="space-y-1.5">
+                      {/* Top-level comment */}
+                      <div className="flex gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-semibold text-gray-900">{c.author}</span>
+                            <span className="text-xs text-gray-400">{new Date(c.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                          {c.quote && (
+                            <div className="text-xs text-gray-500 bg-white border-l-2 border-kolet-yellow px-3 py-2 mb-2 rounded-r-md leading-relaxed italic">
+                              &ldquo;{c.quote}&rdquo;
+                            </div>
+                          )}
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{c.body}</p>
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-1.5">
+                          <button
+                            onClick={() => resolveComment(c.id, true)}
+                            title="Mark as resolved"
+                            className="flex items-center gap-1 text-xs text-gray-400 hover:text-emerald-500 transition-colors px-2 py-1 rounded-lg hover:bg-emerald-50 border border-transparent hover:border-emerald-200"
+                          >
+                            <CheckCheck size={13} /> Resolve
+                          </button>
+                          <button
+                            onClick={() => { setReplyingTo(isReplying ? null : c.id); setReplyBody(''); }}
+                            className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors ${
+                              isReplying
+                                ? 'text-kolet-yellow border-kolet-yellow bg-kolet-yellow/10'
+                                : 'text-gray-400 border-transparent hover:text-gray-700 hover:bg-stone-100'
+                            }`}
+                          >
+                            <Send size={11} /> Reply
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Replies */}
+                      {threadReplies.map(r => (
+                        <div key={r.id} className="ml-6 flex gap-3 p-3 bg-stone-50 border border-stone-200 rounded-lg">
+                          <div className="w-0.5 bg-stone-300 rounded-full shrink-0 self-stretch" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-semibold text-gray-900">{r.author}</span>
+                              <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{r.body}</p>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Inline reply form */}
+                      {isReplying && (
+                        <div className="ml-6 p-3 bg-stone-50 border border-stone-200 rounded-lg space-y-2">
+                          <textarea
+                            value={replyBody}
+                            onChange={e => setReplyBody(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitReply(c.id); }}
+                            placeholder="Write a reply…"
+                            rows={2}
+                            autoFocus
+                            className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors resize-none"
+                          />
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-gray-400">⌘↵ to post</span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => { setReplyingTo(null); setReplyBody(''); }}
+                                className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-200 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => submitReply(c.id)}
+                                disabled={replySubmitting || !replyBody.trim()}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
+                              >
+                                {replySubmitting ? <Loader size={11} className="animate-spin" /> : <Send size={11} />}
+                                {replySubmitting ? 'Posting…' : 'Post Reply'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Resolved toggle */}
+                {resolved.length > 0 && (
+                  <div>
+                    <button
+                      onClick={() => setShowResolved(v => !v)}
+                      className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
+                    >
+                      {showResolved ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      {showResolved ? 'Hide' : 'Show'} {resolved.length} resolved
+                    </button>
+                    {showResolved && (
+                      <div className="mt-3 space-y-2">
+                        {resolved.map(c => {
+                          const threadReplies = replies.filter(r => r.parent_id === c.id);
+                          return (
+                            <div key={c.id} className="space-y-1">
+                              <div className="flex gap-3 p-3 bg-stone-50 border border-stone-200 rounded-lg opacity-60">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <CheckCheck size={11} className="text-emerald-500 shrink-0" />
+                                    <span className="text-xs font-semibold text-gray-500">{c.author}</span>
+                                    <span className="text-xs text-gray-400">{new Date(c.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+                                  </div>
+                                  <p className="text-xs text-gray-500 line-through whitespace-pre-wrap">{c.body}</p>
+                                </div>
+                                <button
+                                  onClick={() => resolveComment(c.id, false)}
+                                  className="shrink-0 text-xs text-gray-400 hover:text-orange-500 transition-colors px-2 py-1 rounded-lg hover:bg-orange-50 border border-transparent hover:border-orange-200"
+                                >
+                                  Reopen
+                                </button>
+                              </div>
+                              {threadReplies.map(r => (
+                                <div key={r.id} className="ml-6 flex gap-3 p-2.5 bg-stone-50 border border-stone-200 rounded-lg opacity-50">
+                                  <div className="w-0.5 bg-stone-300 rounded-full shrink-0 self-stretch" />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-0.5">
+                                      <span className="text-xs font-semibold text-gray-500">{r.author}</span>
+                                    </div>
+                                    <p className="text-xs text-gray-400 whitespace-pre-wrap">{r.body}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* New comment form */}
+                <div className="pt-2 border-t border-stone-100 space-y-2">
+                  <input
+                    value={commentAuthor}
+                    onChange={e => setCommentAuthor(e.target.value)}
+                    placeholder="Your name (optional)"
+                    className="w-full bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors"
+                  />
+                  <textarea
+                    value={commentBody}
+                    onChange={e => setCommentBody(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitComment(); }}
+                    placeholder="Describe the change needed — e.g. 'The intro feels too long, trim to 2 sentences' or 'Fact-check the statistic in paragraph 3'…"
+                    rows={3}
+                    className="w-full bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors resize-y"
+                  />
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-400">⌘↵ to submit</span>
+                    <button
+                      onClick={() => submitComment()}
+                      disabled={commentSubmitting || !commentBody.trim()}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-sm font-semibold rounded-lg transition-colors disabled:opacity-40"
+                    >
+                      {commentSubmitting ? <Loader size={13} className="animate-spin" /> : <Send size={13} />}
+                      {commentSubmitting ? 'Posting…' : 'Post Comment'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── AI Review Panel ── */}
       <div className="mt-6">

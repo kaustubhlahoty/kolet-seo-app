@@ -3,6 +3,7 @@ import { sql } from '@/lib/db';
 import { getSystemPrompt } from '@/lib/prompts';
 import { getKoletKnowledgeBrief } from '@/lib/kolet-knowledge';
 import { getPricingContext } from '@/lib/pricing';
+import { buildCtaHref } from '@/lib/cta-href';
 import { randomUUID } from 'crypto';
 
 export const maxDuration = 300;
@@ -70,7 +71,8 @@ Language: ${langLabel} — write the ENTIRE article in ${langLabel}, including a
 Critical reminders:
 - Body word count: ${wordCountTarget} words (post.content only, excluding intro/takeaways/metadata)
 - PROMO card with exact syntax required
-- Follow all typography rules for ${langLabel}`;
+- Follow all typography rules for ${langLabel}
+- PROMO card ctaHref: use EXACTLY "${buildCtaHref(target_zone, lang)}" — do not change this URL. The country name in the URL is always in English regardless of article language.`;
 
         if (brief) prompt += `\n\nContent brief to follow (use this as your structural guide):\n${brief}`;
 
@@ -94,6 +96,9 @@ Critical reminders:
             controller.enqueue(sse({ type: 'chunk', text }));
           }
         }
+
+        // Hard strip: remove any em dashes the model may have produced
+        fullText = fullText.replace(/\s*—\s*/g, ', ');
 
         controller.enqueue(sse({ type: 'status', message: 'Saving article...' }));
 

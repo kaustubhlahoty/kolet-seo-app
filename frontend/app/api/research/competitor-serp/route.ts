@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     // Battle plan from Claude
     const ac  = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const msg = await ac.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'claude-sonnet-4-6',
       max_tokens: 800,
       messages: [{
         role: 'user',

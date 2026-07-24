@@ -3,37 +3,38 @@ import Anthropic from '@anthropic-ai/sdk';
 import { sql } from '@/lib/db';
 import { getSystemPrompt } from '@/lib/prompts';
 import { getKoletKnowledgeBrief } from '@/lib/kolet-knowledge';
+import { buildCtaHref } from '@/lib/cta-href';
 
 export const maxDuration = 300;
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const { issues = [], fixes = [], seo_checks = {} } = await request.json();
+  try {
+    const { id } = await params;
+    const { issues = [], fixes = [], seo_checks = {} } = await request.json();
 
-  const rows = await sql`SELECT content, title, focus_keyword, lang, target_zone, content_format FROM articles WHERE id=${id}`;
-  if (!rows.length) return NextResponse.json({ error: 'Article not found' }, { status: 404 });
+    const rows = await sql`SELECT content, title, focus_keyword, lang, target_zone, content_format FROM articles WHERE id=${id}`;
+    if (!rows.length) return NextResponse.json({ error: 'Article not found' }, { status: 404 });
 
-  const { content, focus_keyword, lang, target_zone, content_format } = rows[0] as any;
+    const { content, focus_keyword, lang, target_zone, content_format } = rows[0] as any;
 
-  // Preserve existing content before overwriting so it can be recovered
-  await sql`UPDATE articles SET content_backup=${content} WHERE id=${id}`.catch(() => {});
+    await sql`UPDATE articles SET content_backup=${content} WHERE id=${id}`.catch(() => {});
 
-  const failedChecks = Object.entries(seo_checks as Record<string, { pass: boolean; label: string; pts: number }>)
-    .filter(([, v]) => !v.pass)
-    .map(([, v]) => `- ${v.label} (worth ${v.pts} pts)`);
+    const failedChecks = Object.entries(seo_checks as Record<string, { pass: boolean; label: string; pts: number }>)
+      .filter(([, v]) => !v.pass)
+      .map(([, v]) => `- ${v.label} (worth ${v.pts} pts)`);
 
-  const langLabels: Record<string, string> = { fr: 'français', en: 'English', de: 'Deutsch', nl: 'Nederlands', es: 'Español' };
-  const langLabel = langLabels[lang ?? 'en'] ?? 'English';
-  const SYSTEM = getSystemPrompt(lang ?? 'en');
-  const knowledge = getKoletKnowledgeBrief();
+    const langLabels: Record<string, string> = { fr: 'français', en: 'English', de: 'Deutsch', nl: 'Nederlands', es: 'Español' };
+    const langLabel = langLabels[lang ?? 'en'] ?? 'English';
+    const SYSTEM = getSystemPrompt(lang ?? 'en');
+    const knowledge = getKoletKnowledgeBrief();
 
-  const WORD_COUNT_BY_FORMAT: Record<string, string> = {
-    guide: '1,000–1,500', comparison: '1,000–1,400', 'how-to': '800–1,200',
-    listicle: '600–900', faq: '600–900', pillar: '1,500–2,000',
-  };
-  const wordCountTarget = WORD_COUNT_BY_FORMAT[content_format ?? 'guide'] ?? '800–1,200';
+    const WORD_COUNT_BY_FORMAT: Record<string, string> = {
+      guide: '1,000–1,500', comparison: '1,000–1,400', 'how-to': '800–1,200',
+      listicle: '600–900', faq: '600–900', pillar: '1,500–2,000',
+    };
+    const wordCountTarget = WORD_COUNT_BY_FORMAT[content_format ?? 'guide'] ?? '800–1,200';
 
-  const prompt = `You are rewriting a Kolet eSIM article to fix specific quality and SEO gaps. Keep the EXACT SAME CMS output format and structure. Do NOT change the topic, focus keyword, or main angle.
+    const prompt = `You are rewriting a Kolet eSIM article to fix specific quality and SEO gaps. Keep the EXACT SAME CMS output format and structure. Do NOT change the topic, focus keyword, or main angle.
 
 ORIGINAL ARTICLE:
 ${(content || '').slice(0, 6000)}
@@ -59,25 +60,27 @@ REWRITE RULES:
 - Write entirely in ${langLabel}
 - Word count target: ${wordCountTarget} words in post.content (format: ${content_format ?? 'guide'})
 - Target zone: ${target_zone}
-- Brand voice: warm, direct, slightly irreverent — no corporate language, no em dashes, no AI-sounding openers
+- Brand voice: warm, direct, slightly irreverent. No corporate language. No AI-sounding openers.
+- CRITICAL: The character — (em dash) must never appear anywhere in the output. Replace every em dash with a comma, colon, semicolon, or period. Zero exceptions.
 - Preserve all IMAGE_PLACEHOLDER_ references and the PROMO CARD
+- PROMO card ctaHref: use EXACTLY "${buildCtaHref(target_zone, lang ?? 'en')}" — do not change this URL. The country name in the URL is always in English regardless of article language.
 
 ${knowledge}
 
 Output ONLY the complete rewritten article in CMS format. No preamble, no explanation, no markdown fences.`;
 
-  try {
     const ac = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const msg = await ac.messages.create({
+    const stream = await ac.messages.stream({
       model: 'claude-sonnet-4-6',
       max_tokens: 6000,
       system: SYSTEM,
       messages: [{ role: 'user', content: prompt }],
     });
+    const finalMsg = await stream.finalMessage();
+    const rawRewrite = (finalMsg.content[0] as { type: string; text: string }).text.trim();
+    // Hard strip: remove any em dashes the model may have produced
+    const rewrittenContent = rawRewrite.replace(/\s*—\s*/g, ', ');
 
-    const rewrittenContent = (msg.content[0] as any).text.trim();
-
-    // Recalculate SEO score with same logic as audit route
     const kw = (focus_keyword || '').toLowerCase();
     const body = rewrittenContent.replace(/POST TITLE[\s\S]*?═{10,}\nPOST CONTENT[^\n]*\n/, '');
     const words = body.split(/\s+/).filter(Boolean);
@@ -105,15 +108,14 @@ Output ONLY the complete rewritten article in CMS format. No preamble, no explan
     const pts: Record<string, number> = { kw_in_title: 15, kw_in_first_100: 12, kw_density_ok: 10, word_count_ok: 10, has_h2: 10, multiple_h2: 8, has_images: 8, has_promo: 7, kw_in_meta: 8, no_bad_opener: 12 };
     const newSeoScore = Object.entries(seoChecks).reduce((sum, [k, pass]) => sum + (pass ? (pts[k] ?? 0) : 0), 0);
 
-    // Clear audit_report — the rewrite invalidates the previous audit
     await sql`UPDATE articles SET content=${rewrittenContent}, seo_score=${newSeoScore}, audit_report=NULL, status='needs_revision' WHERE id=${id}`;
 
-    // Fire review in background
     const origin = new URL(request.url).origin;
     fetch(`${origin}/api/articles/${id}/review`, { method: 'POST' }).catch(() => {});
 
     return NextResponse.json({ seo_score: newSeoScore });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 503 });
+    console.error('[rewrite] ERROR:', e?.message, e?.stack);
+    return NextResponse.json({ error: e?.message ?? 'Internal server error' }, { status: 500 });
   }
 }

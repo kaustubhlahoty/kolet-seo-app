@@ -12,7 +12,7 @@ export async function POST(request: Request) {
 
   try {
     const ac = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const msg = await ac.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 800, system: BRIEF_SYSTEM, messages: [{ role: 'user', content: userMsg }] });
+    const msg = await ac.messages.create({ model: 'claude-sonnet-4-6', max_tokens: 800, system: BRIEF_SYSTEM, messages: [{ role: 'user', content: userMsg }] });
     return NextResponse.json({ brief: (msg.content[0] as any).text.trim() });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 503 });
