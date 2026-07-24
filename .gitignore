@@ -1,21 +1,17 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
+# Old Python backend (replaced by Next.js API routes)
+backend/
 
 # Environment & secrets
-backend/.env
 .env
+.env.*
 
-# Database (keep schema, ignore data file)
+# Database
 *.db
 *.db-shm
 *.db-wal
 
-# Generated images
-backend/articles/images/
+# Generated report files
+*.html
 
 # Node
 frontend/node_modules/
