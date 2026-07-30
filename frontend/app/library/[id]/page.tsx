@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon, Trash2, X } from "lucide-react";
 import { diffWords } from "@/lib/diff";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
@@ -263,12 +263,11 @@ function segmentText(text: string, comments: Comment[]): Segment[] {
 }
 
 function HighlightedText({
-  text, comments, onEnter, onLeave,
+  text, comments, onOpen,
 }: {
   text: string;
   comments: Comment[];
-  onEnter: (c: Comment, rect: DOMRect) => void;
-  onLeave: () => void;
+  onOpen: (c: Comment, rect: DOMRect) => void;
 }) {
   const segments = segmentText(text, comments);
   return (
@@ -277,9 +276,8 @@ function HighlightedText({
         seg.comment ? (
           <mark
             key={i}
-            className="bg-kolet-yellow/30 border-b-2 border-kolet-yellow/70 rounded-sm cursor-default not-italic"
-            onMouseEnter={e => onEnter(seg.comment!, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-            onMouseLeave={onLeave}
+            className="bg-kolet-yellow/30 border-b-2 border-kolet-yellow/70 rounded-sm cursor-pointer not-italic hover:bg-kolet-yellow/50 transition-colors"
+            onClick={e => { e.stopPropagation(); onOpen(seg.comment!, (e.currentTarget as HTMLElement).getBoundingClientRect()); }}
           >
             {seg.text}
           </mark>
@@ -333,9 +331,10 @@ export default function ArticleDetailPage() {
   const [replyingTo, setReplyingTo]     = useState<string | null>(null);
   const [replyBody, setReplyBody]       = useState('');
   const [replySubmitting, setReplySubmitting] = useState(false);
-  // Comment hover popover
-  const [hoverComment, setHoverComment] = useState<Comment | null>(null);
-  const [hoverRect, setHoverRect]       = useState<DOMRect | null>(null);
+  // Inline comment thread popover (click-to-open, anchored on the highlight)
+  const [activeThread, setActiveThread]     = useState<Comment | null>(null);
+  const [activeThreadRect, setActiveThreadRect] = useState<DOMRect | null>(null);
+  const activeThreadRef = useRef<HTMLDivElement>(null);
   // Review mode (inline highlighting)
   const [reviewMode, setReviewMode]     = useState(false);
   const [selectionPos, setSelectionPos] = useState<{ x: number; y: number } | null>(null);
@@ -463,6 +462,25 @@ export default function ArticleDetailPage() {
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [showInlineForm, showAiForm]);
 
+  // Dismiss the inline comment-thread popover when clicking outside it
+  useEffect(() => {
+    if (!activeThread) return;
+    function onMouseDown(e: MouseEvent) {
+      if (activeThreadRef.current && !activeThreadRef.current.contains(e.target as Node)) {
+        closeActiveThread();
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [activeThread]);
+
+  function closeActiveThread() {
+    setActiveThread(null);
+    setActiveThreadRect(null);
+    setReplyingTo(null);
+    setReplyBody('');
+  }
+
   async function submitComment(quote = '') {
     if (!commentBody.trim()) return;
     setCommentSubmitting(true);
@@ -484,6 +502,16 @@ export default function ArticleDetailPage() {
     });
     const d = await res.json();
     if (d.comment) setComments(prev => prev.map(c => c.id === commentId ? d.comment : c));
+  }
+
+  async function deleteComment(commentId: string, cascadeIds: string[] = []) {
+    if (!window.confirm(cascadeIds.length ? 'Delete this comment and its replies?' : 'Delete this comment?')) return;
+    const ids = [commentId, ...cascadeIds];
+    await Promise.all(ids.map(cid =>
+      fetch(`${API_BASE}/api/articles/${id}/comments/${cid}`, { method: 'DELETE' }).catch(() => {})
+    ));
+    setComments(prev => prev.filter(c => !ids.includes(c.id)));
+    if (activeThread && ids.includes(activeThread.id)) closeActiveThread();
   }
 
   async function submitReply(parentId: string) {
@@ -1019,10 +1047,7 @@ export default function ArticleDetailPage() {
       {/* Review Mode — readable prose with inline text selection */}
       {reviewMode && (() => {
         const openQuoted = comments.filter(c => !c.resolved && !c.parent_id);
-        const hoverHandlers = {
-          onEnter: (c: Comment, rect: DOMRect) => { setHoverComment(c); setHoverRect(rect); },
-          onLeave: () => { setHoverComment(null); setHoverRect(null); },
-        };
+        const openThread = (c: Comment, rect: DOMRect) => { setActiveThread(c); setActiveThreadRect(rect); };
         return (
           <div
             ref={reviewRef}
@@ -1048,21 +1073,21 @@ export default function ArticleDetailPage() {
             )}
             {sections.intro && (
               <div className="text-gray-600 text-base leading-relaxed mb-6 border-l-4 border-kolet-yellow pl-4">
-                <HighlightedText text={sections.intro} comments={openQuoted} {...hoverHandlers} />
+                <HighlightedText text={sections.intro} comments={openQuoted} onOpen={openThread} />
               </div>
             )}
             {sections.keyTakeaways && (
               <div className="mb-6">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Key Takeaways</p>
                 <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
-                  <HighlightedText text={sections.keyTakeaways} comments={openQuoted} {...hoverHandlers} />
+                  <HighlightedText text={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} />
                 </pre>
               </div>
             )}
 
             {editStage === 'idle' && (
               <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7">
-                <HighlightedText text={sections.content} comments={openQuoted} {...hoverHandlers} />
+                <HighlightedText text={sections.content} comments={openQuoted} onOpen={openThread} />
               </div>
             )}
 
@@ -1130,32 +1155,115 @@ export default function ArticleDetailPage() {
         );
       })()}
 
-      {/* Comment hover popover */}
-      {hoverComment && hoverRect && (() => {
-        const above = hoverRect.top > 140;
+      {/* Inline comment thread popover — click a highlight to open; reply, resolve, or delete without scrolling down */}
+      {activeThread && activeThreadRect && (() => {
+        const above = activeThreadRect.top > 240;
+        const threadReplies = comments.filter(r => r.parent_id === activeThread.id);
+        const isReplying = replyingTo === activeThread.id;
+        const FORM_W = 320;
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+        const safeLeft = Math.max(FORM_W / 2 + 12, Math.min(activeThreadRect.left + activeThreadRect.width / 2, vw - FORM_W / 2 - 12));
         return (
           <div
+            ref={activeThreadRef}
             style={{
               position: 'fixed',
-              left: Math.max(148, Math.min(hoverRect.left + hoverRect.width / 2, window.innerWidth - 148)),
-              top: above ? hoverRect.top - 10 : hoverRect.bottom + 10,
+              left: safeLeft,
+              top: above ? activeThreadRect.top - 10 : activeThreadRect.bottom + 10,
               transform: `translateX(-50%)${above ? ' translateY(-100%)' : ''}`,
               zIndex: 9999,
             }}
-            className="w-72 bg-gray-900 text-white rounded-xl shadow-2xl p-3.5 pointer-events-none"
+            className="w-80 max-h-[70vh] overflow-y-auto bg-white border border-stone-300 rounded-xl shadow-2xl p-4 space-y-3"
           >
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-xs font-semibold">{hoverComment.author}</span>
-              <span className="text-xs text-gray-400">
-                {new Date(hoverComment.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-              </span>
+            {/* Top-level comment */}
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-gray-900">{activeThread.author}</span>
+                <span className="text-xs text-gray-400">
+                  {new Date(activeThread.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => { resolveComment(activeThread.id, true); closeActiveThread(); }}
+                  title="Mark as resolved"
+                  className="text-gray-400 hover:text-emerald-500 p-1 rounded-lg hover:bg-emerald-50 transition-colors"
+                >
+                  <CheckCheck size={13} />
+                </button>
+                <button
+                  onClick={() => deleteComment(activeThread.id, threadReplies.map(r => r.id))}
+                  title="Delete comment"
+                  className="text-gray-400 hover:text-red-500 p-1 rounded-lg hover:bg-red-50 transition-colors"
+                >
+                  <Trash2 size={13} />
+                </button>
+                <button onClick={closeActiveThread} title="Close" className="text-gray-400 hover:text-gray-700 p-1 rounded-lg hover:bg-stone-100 transition-colors">
+                  <X size={13} />
+                </button>
+              </div>
             </div>
-            <p className="text-xs leading-relaxed text-gray-200 whitespace-pre-wrap">{hoverComment.body}</p>
-            {/* Arrow */}
-            <div
-              className="absolute left-1/2 w-2 h-2 bg-gray-900 rotate-45"
-              style={{ [above ? 'bottom' : 'top']: -4, transform: 'translateX(-50%) rotate(45deg)' }}
-            />
+            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{activeThread.body}</p>
+
+            {/* Replies */}
+            {threadReplies.map(r => (
+              <div key={r.id} className="ml-3 pl-3 border-l-2 border-stone-200 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-xs font-semibold text-gray-900">{r.author}</span>
+                    <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+                  </div>
+                  <p className="text-xs text-gray-600 whitespace-pre-wrap leading-relaxed">{r.body}</p>
+                </div>
+                <button onClick={() => deleteComment(r.id)} title="Delete reply" className="shrink-0 text-gray-300 hover:text-red-500 p-1 rounded-lg hover:bg-red-50 transition-colors">
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+
+            {/* Reply form */}
+            {isReplying ? (
+              <div className="space-y-2 pt-1 border-t border-stone-100">
+                <input
+                  value={commentAuthor}
+                  onChange={e => setCommentAuthor(e.target.value)}
+                  placeholder="Your name (optional)"
+                  className="w-full text-xs bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 focus:outline-none focus:border-kolet-yellow transition-colors"
+                />
+                <textarea
+                  value={replyBody}
+                  onChange={e => setReplyBody(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitReply(activeThread.id); }}
+                  placeholder="Write a reply…"
+                  rows={2}
+                  autoFocus
+                  className="w-full text-xs bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 focus:outline-none focus:border-kolet-yellow transition-colors resize-none"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => { setReplyingTo(null); setReplyBody(''); }}
+                    className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => submitReply(activeThread.id)}
+                    disabled={replySubmitting || !replyBody.trim()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    {replySubmitting ? <Loader size={11} className="animate-spin" /> : <Send size={11} />}
+                    {replySubmitting ? 'Posting…' : 'Post Reply'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => { setReplyingTo(activeThread.id); setReplyBody(''); }}
+                className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-stone-100 transition-colors"
+              >
+                <Send size={11} /> Reply
+              </button>
+            )}
           </div>
         );
       })()}
@@ -1621,6 +1729,13 @@ export default function ArticleDetailPage() {
                           >
                             <Send size={11} /> Reply
                           </button>
+                          <button
+                            onClick={() => deleteComment(c.id, threadReplies.map(r => r.id))}
+                            title="Delete comment"
+                            className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors px-2 py-1 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
+                          >
+                            <Trash2 size={11} /> Delete
+                          </button>
                         </div>
                       </div>
 
@@ -1635,6 +1750,13 @@ export default function ArticleDetailPage() {
                             </div>
                             <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{r.body}</p>
                           </div>
+                          <button
+                            onClick={() => deleteComment(r.id)}
+                            title="Delete reply"
+                            className="shrink-0 self-start text-gray-300 hover:text-red-500 p-1 rounded-lg hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 size={11} />
+                          </button>
                         </div>
                       ))}
 
@@ -1700,12 +1822,21 @@ export default function ArticleDetailPage() {
                                   </div>
                                   <p className="text-xs text-gray-500 line-through whitespace-pre-wrap">{c.body}</p>
                                 </div>
-                                <button
-                                  onClick={() => resolveComment(c.id, false)}
-                                  className="shrink-0 text-xs text-gray-400 hover:text-orange-500 transition-colors px-2 py-1 rounded-lg hover:bg-orange-50 border border-transparent hover:border-orange-200"
-                                >
-                                  Reopen
-                                </button>
+                                <div className="shrink-0 flex flex-col items-end gap-1.5">
+                                  <button
+                                    onClick={() => resolveComment(c.id, false)}
+                                    className="text-xs text-gray-400 hover:text-orange-500 transition-colors px-2 py-1 rounded-lg hover:bg-orange-50 border border-transparent hover:border-orange-200"
+                                  >
+                                    Reopen
+                                  </button>
+                                  <button
+                                    onClick={() => deleteComment(c.id, threadReplies.map(r => r.id))}
+                                    title="Delete comment"
+                                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors px-2 py-1 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
+                                  >
+                                    <Trash2 size={11} /> Delete
+                                  </button>
+                                </div>
                               </div>
                               {threadReplies.map(r => (
                                 <div key={r.id} className="ml-6 flex gap-3 p-2.5 bg-stone-50 border border-stone-200 rounded-lg opacity-50">
