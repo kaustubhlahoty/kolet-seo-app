@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon, Trash2, X, GitPullRequest, GitMerge } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Trash2, X, GitPullRequest, GitMerge } from "lucide-react";
 import { diffWords } from "@/lib/diff";
 import { placeholdersPreserved } from "@/lib/image-placeholders";
 import type { Comment } from "@/lib/types";
@@ -331,11 +331,6 @@ export default function ArticleDetailPage() {
   const [manualError, setManualError]         = useState('');
   const [manualSubmitting, setManualSubmitting] = useState(false);
   const manualFormRef = useRef<HTMLDivElement>(null);
-  // Direct edit-in-place with before/after diff preview
-  const [editStage, setEditStage]     = useState<'idle' | 'editing' | 'diff'>('idle');
-  const [editOriginal, setEditOriginal] = useState('');
-  const [editDraft, setEditDraft]       = useState('');
-  const [diffError, setDiffError]       = useState('');
   // Content save state
   const [isDirty, setIsDirty]           = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
@@ -559,7 +554,6 @@ export default function ArticleDetailPage() {
   }
 
   function handleReviewMouseUp() {
-    if (editStage !== 'idle') return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
     const range = sel.getRangeAt(0);
@@ -625,16 +619,26 @@ export default function ArticleDetailPage() {
     setManualError('');
   }
 
-  async function submitManualEdit() {
-    if (!pendingQuote || !manualDraft.trim() || manualDraft === pendingQuote) return;
-    const placeholderCheck = placeholdersPreserved(pendingQuote, manualDraft);
-    if (!placeholderCheck.ok) {
-      setManualError(`This would remove an image reference (${placeholderCheck.missing.join(', ')}).`);
-      return;
+  /**
+   * The single gate every content-changing action goes through: admins write straight
+   * to the article, everyone else submits a suggestion for an admin to merge/reject.
+   * Never lets an edit silently drop an IMAGE_PLACEHOLDER token either way.
+   */
+  async function proposeChange(
+    original: string,
+    proposed: string,
+    source: 'direct_edit' | 'ai_rewrite' = 'direct_edit'
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!original || !proposed.trim() || original === proposed) {
+      return { ok: false, error: 'No change to apply' };
     }
-    setManualSubmitting(true);
+    const placeholderCheck = placeholdersPreserved(original, proposed);
+    if (!placeholderCheck.ok) {
+      return { ok: false, error: `This would remove an image reference (${placeholderCheck.missing.join(', ')}).` };
+    }
     if (isAdmin) {
-      const updated = rawContent.replace(pendingQuote, manualDraft);
+      const updated = rawContentRef.current.replace(original, proposed);
+      rawContentRef.current = updated;
       setRawContent(updated);
       setContentKey(k => k + 1);
       try {
@@ -644,21 +648,29 @@ export default function ArticleDetailPage() {
           body: JSON.stringify({ content: updated }),
         });
       } catch {}
-      setManualSubmitting(false);
-      dismissManualForm();
-      return;
+      return { ok: true };
     }
     try {
       const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ original_text: pendingQuote, proposed_text: manualDraft, source: 'direct_edit' }),
+        body: JSON.stringify({ original_text: original, proposed_text: proposed, source }),
       });
       const data = await res.json();
-      if (!res.ok) { setManualError(data.error || 'Failed to submit'); setManualSubmitting(false); return; }
+      if (!res.ok) return { ok: false, error: data.error || 'Failed to submit' };
       loadSuggestions();
-    } catch {}
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e.message || 'Failed to submit' };
+    }
+  }
+
+  async function submitManualEdit() {
+    if (!pendingQuote || !manualDraft.trim() || manualDraft === pendingQuote) return;
+    setManualSubmitting(true);
+    const result = await proposeChange(pendingQuote, manualDraft, 'direct_edit');
     setManualSubmitting(false);
+    if (!result.ok) { setManualError(result.error); return; }
     dismissManualForm();
   }
 
@@ -683,101 +695,14 @@ export default function ArticleDetailPage() {
 
   async function acceptAiRewrite() {
     if (!aiSuggestion || !pendingQuote) return;
-    const placeholderCheck = placeholdersPreserved(pendingQuote, aiSuggestion);
-    if (!placeholderCheck.ok) {
-      setAiError(`This would remove an image reference (${placeholderCheck.missing.join(', ')}) — try again.`);
-      return;
-    }
-    if (isAdmin) {
-      const updated = rawContent.replace(pendingQuote, aiSuggestion);
-      setRawContent(updated);
-      setContentKey(k => k + 1);
-      try {
-        await fetch(`${API_BASE}/api/articles/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: updated }),
-        });
-      } catch {}
-      dismissAiForm();
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ original_text: pendingQuote, proposed_text: aiSuggestion, source: 'ai_rewrite' }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setAiError(data.error || 'Failed to submit'); return; }
-      loadSuggestions();
-    } catch {}
+    const result = await proposeChange(pendingQuote, aiSuggestion, 'ai_rewrite');
+    if (!result.ok) { setAiError(result.error); return; }
     dismissAiForm();
   }
 
-  function startEditingContent() {
-    dismissInlineComment();
-    dismissAiForm();
-    setEditOriginal(sections.content);
-    setEditDraft(sections.content);
-    setEditStage('editing');
-    setDiffError('');
+  async function submitBlockEdit(original: string, proposed: string): Promise<{ ok: boolean; error?: string }> {
+    return proposeChange(original, proposed, 'direct_edit');
   }
-
-  function previewEditChanges() {
-    setEditStage('diff');
-    setDiffError('');
-  }
-
-  function keepEditing() {
-    setEditStage('editing');
-    setDiffError('');
-  }
-
-  function discardEdit() {
-    setEditStage('idle');
-    setEditOriginal('');
-    setEditDraft('');
-    setDiffError('');
-  }
-
-  async function acceptEdit() {
-    const placeholderCheck = placeholdersPreserved(editOriginal, editDraft);
-    if (!placeholderCheck.ok) {
-      setDiffError(`This would remove an image reference (${placeholderCheck.missing.join(', ')}) — go back and keep it intact.`);
-      return;
-    }
-    if (isAdmin) {
-      const updated = rawContent.replace(editOriginal, editDraft);
-      setRawContent(updated);
-      setContentKey(k => k + 1);
-      try {
-        await fetch(`${API_BASE}/api/articles/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: updated }),
-        });
-      } catch {}
-      discardEdit();
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ original_text: editOriginal, proposed_text: editDraft, source: 'direct_edit' }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setDiffError(data.error || 'Failed to submit'); return; }
-      loadSuggestions();
-    } catch {}
-    discardEdit();
-  }
-
-  const editDiff = useMemo(
-    () => (editStage === 'diff' ? diffWords(editOriginal, editDraft) : []),
-    [editStage, editOriginal, editDraft]
-  );
 
   // Auto-save urlMap to DB whenever it changes (skip the initial populate from DB)
   useEffect(() => {
@@ -843,12 +768,15 @@ export default function ArticleDetailPage() {
   }
 
   // ── Save content to DB (reads from refs — safe inside setTimeout/useCallback) ──
+  // Admins write straight through. Anyone else submits the diff as a suggestion —
+  // the stored content never changes until an admin approves it in the panel below.
   const saveContent = useCallback(async () => {
     if (!rawContentRef.current) return;
     setIsSaving(true);
     setSaveError('');
     try {
-      let updatedRaw = rawContentRef.current;
+      const before = rawContentRef.current;
+      let updatedRaw = before;
 
       let liveBody = liveContentRef.current;
       if (liveBody) {
@@ -865,14 +793,22 @@ export default function ArticleDetailPage() {
       if (title?.trim()) updatedRaw = replaceSeoLine(updatedRaw, 'SEO TITLE', title);
       if (desc?.trim())  updatedRaw = replaceSeoLine(updatedRaw, 'SEO DESCRIPTION', desc);
 
-      await fetch(`${API_BASE}/api/articles/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: updatedRaw }),
-      });
+      if (updatedRaw === before) { setIsDirty(false); return; }
 
-      rawContentRef.current = updatedRaw;
-      setRawContent(updatedRaw);
+      if (isAdmin) {
+        await fetch(`${API_BASE}/api/articles/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: updatedRaw }),
+        });
+        rawContentRef.current = updatedRaw;
+        setRawContent(updatedRaw);
+      } else {
+        const result = await proposeChange(before, updatedRaw, 'direct_edit');
+        if (!result.ok) { setSaveError(result.error); return; }
+        // Pending admin approval — stored content is untouched until merged.
+      }
+
       setIsDirty(false);
       setLastSavedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (e: any) {
@@ -880,12 +816,14 @@ export default function ArticleDetailPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [id]);
+  }, [id, isAdmin]);
 
-  // ── Track content edits + debounce autosave ──
+  // ── Track content edits ── admins autosave on a debounce; everyone else must click
+  // Save explicitly, since every autosave tick would otherwise open a new suggestion.
   function handleContentChange(value: string) {
     liveContentRef.current = value;
     setIsDirty(true);
+    if (!isAdmin) return;
     if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
     autoSaveRef.current = setTimeout(() => saveContent(), 2000);
   }
@@ -1154,7 +1092,7 @@ export default function ArticleDetailPage() {
           )}
           {!isSaving && lastSavedAt && !isDirty && (
             <span className="text-xs text-gray-400 flex items-center gap-1">
-              <Check size={11} /> Saved {lastSavedAt}
+              <Check size={11} /> {isAdmin ? 'Saved' : 'Submitted'} {lastSavedAt}
             </span>
           )}
           {isDirty && !isSaving && (
@@ -1165,8 +1103,8 @@ export default function ArticleDetailPage() {
             disabled={isSaving}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 disabled:opacity-40 text-kolet-black text-xs font-semibold rounded-lg transition-colors"
           >
-            {isSaving ? <Loader size={11} className="animate-spin" /> : <Check size={11} />}
-            Save
+            {isSaving ? <Loader size={11} className="animate-spin" /> : isAdmin ? <Check size={11} /> : <GitPullRequest size={11} />}
+            {isAdmin ? 'Save' : 'Submit for approval'}
           </button>
         </div>
       </div>
@@ -1188,104 +1126,25 @@ export default function ArticleDetailPage() {
             onMouseUp={handleReviewMouseUp}
             className="mb-6 bg-white border-2 border-orange-200 rounded-xl p-8 shadow-sm cursor-text select-text"
           >
-            <div className="flex items-center justify-between gap-3 mb-6">
-              <div className="flex items-center gap-2 text-xs text-orange-600 font-semibold">
-                <MessageSquare size={13} />
-                Review mode — select text for Comment/Ask AI, or edit the body directly below
-              </div>
-              {editStage === 'idle' && (
-                <button
-                  onClick={startEditingContent}
-                  className="shrink-0 flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-900 border border-stone-300 hover:border-stone-400 rounded-lg px-2.5 py-1 transition-colors"
-                >
-                  <Pencil size={11} /> Edit directly
-                </button>
-              )}
+            <div className="flex items-center gap-2 mb-6 text-xs text-orange-600 font-semibold">
+              <MessageSquare size={13} />
+              Review mode — select text for Comment/Suggest edit/Ask AI, or hover any line for the ✏️ to edit it in place
             </div>
             {sections.title && (
               <h1 className="text-2xl font-bold text-gray-900 mb-5 leading-tight">{sections.title}</h1>
             )}
             {sections.intro && (
               <div className="text-gray-600 text-base leading-relaxed mb-6 border-l-4 border-kolet-yellow pl-4">
-                <MarkdownPreview content={sections.intro} comments={openQuoted} onOpen={openThread} />
+                <MarkdownPreview content={sections.intro} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} />
               </div>
             )}
             {sections.keyTakeaways && (
               <div className="mb-6">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Key Takeaways</p>
-                <MarkdownPreview content={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} />
+                <MarkdownPreview content={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} />
               </div>
             )}
-
-            {editStage === 'idle' && (
-              <MarkdownPreview content={sections.content} comments={openQuoted} onOpen={openThread} />
-            )}
-
-            {editStage === 'editing' && (
-              <div className="space-y-3">
-                <textarea
-                  value={editDraft}
-                  onChange={e => setEditDraft(e.target.value)}
-                  rows={18}
-                  autoFocus
-                  className="w-full text-sm text-gray-800 leading-7 bg-amber-50/40 border-2 border-dashed border-amber-300 rounded-lg p-4 focus:outline-none focus:border-amber-400 transition-colors resize-y font-sans"
-                />
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={discardEdit}
-                    className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={previewEditChanges}
-                    disabled={editDraft === editOriginal}
-                    className="flex items-center gap-1.5 px-4 py-1.5 bg-gray-900 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
-                  >
-                    <EyeIcon size={11} /> Preview changes
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {editStage === 'diff' && (
-              <div className="space-y-3">
-                <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7 bg-stone-50 border border-stone-200 rounded-lg p-4">
-                  {editDiff.map((op, i) => {
-                    if (op.type === 'same') return <span key={i}>{op.value}</span>;
-                    if (op.type === 'removed') return <span key={i} className="bg-red-100 text-red-700 line-through">{op.value}</span>;
-                    return <span key={i} className="bg-green-100 text-green-800">{op.value}</span>;
-                  })}
-                </div>
-                {diffError && (
-                  <p className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    <AlertTriangle size={12} /> {diffError}
-                  </p>
-                )}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={keepEditing}
-                      className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
-                    >
-                      ← Keep editing
-                    </button>
-                    <button
-                      onClick={discardEdit}
-                      className="text-xs text-red-500 hover:text-red-700 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
-                    >
-                      Discard all changes
-                    </button>
-                  </div>
-                  <button
-                    onClick={acceptEdit}
-                    className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors"
-                  >
-                    {isAdmin ? <><Check size={11} /> Apply changes</> : <><GitPullRequest size={11} /> Submit for approval</>}
-                  </button>
-                </div>
-              </div>
-            )}
+            <MarkdownPreview content={sections.content} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} />
           </div>
         );
       })()}

@@ -1,6 +1,6 @@
 "use client";
-import { Fragment, useMemo } from "react";
-import { Image as ImageIcon } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import { Image as ImageIcon, Pencil, Loader, Check, X } from "lucide-react";
 import type { Comment } from "./types";
 
 // ── Entity decoding ─────────────────────────────────────────────────────────
@@ -41,11 +41,15 @@ function tokenizeInline(raw: string): InlineToken[] {
 }
 
 // ── Block parser ─────────────────────────────────────────────────────────────
+// "raw" tracks the exact original source text for a block — required so an
+// in-place edit can be diffed/replaced precisely against the stored content.
+// Only blocks a reviewer would sensibly hand-edit (heading/paragraph/list)
+// carry it; images/promo/table/hr are structural and not inline-editable.
 
 type Block =
-  | { type: "heading"; level: number; text: string }
-  | { type: "paragraph"; text: string }
-  | { type: "list"; items: string[] }
+  | { type: "heading"; level: number; text: string; raw: string }
+  | { type: "paragraph"; text: string; raw: string }
+  | { type: "list"; items: string[]; raw: string }
   | { type: "image"; alt: string; src: string }
   | { type: "promo"; title: string; ctaText: string; ctaHref: string; body: string }
   | { type: "table"; header: string[]; rows: string[][] }
@@ -75,7 +79,7 @@ function parseBlocks(markdown: string): Block[] {
 
     const headingMatch = line.match(/^(#{2,4})\s+(.*)$/);
     if (headingMatch) {
-      blocks.push({ type: "heading", level: headingMatch[1].length, text: headingMatch[2].trim() });
+      blocks.push({ type: "heading", level: headingMatch[1].length, text: headingMatch[2].trim(), raw: line });
       i++; continue;
     }
 
@@ -117,12 +121,14 @@ function parseBlocks(markdown: string): Block[] {
     }
 
     if (isListItem(line)) {
+      const rawLines: string[] = [];
       const items: string[] = [];
       while (i < lines.length && isListItem(lines[i])) {
+        rawLines.push(lines[i]);
         items.push(lines[i].replace(/^[-*]\s+/, "").trim());
         i++;
       }
-      blocks.push({ type: "list", items });
+      blocks.push({ type: "list", items, raw: rawLines.join("\n") });
       continue;
     }
 
@@ -137,7 +143,7 @@ function parseBlocks(markdown: string): Block[] {
       paraLines.push(lines[i]);
       i++;
     }
-    blocks.push({ type: "paragraph", text: paraLines.join(" ") });
+    blocks.push({ type: "paragraph", text: paraLines.join(" "), raw: paraLines.join("\n") });
   }
 
   return blocks;
@@ -173,6 +179,7 @@ function segmentPlainText(text: string, comments: Comment[]): { text: string; co
 }
 
 type OnOpen = (c: Comment, rect: DOMRect) => void;
+type OnSubmitEdit = (original: string, proposed: string) => Promise<{ ok: boolean; error?: string }>;
 
 function InlineRun({ tokens, comments, onOpen }: { tokens: InlineToken[]; comments: Comment[]; onOpen: OnOpen }) {
   return (
@@ -207,14 +214,85 @@ function InlineRun({ tokens, comments, onOpen }: { tokens: InlineToken[]; commen
   );
 }
 
+/** Wraps a block with a hover-reveal pencil that turns it into an in-place editable textarea. */
+function EditableBlock({
+  raw, editable, onSubmitEdit, children,
+}: {
+  raw: string;
+  editable: boolean;
+  onSubmitEdit?: OnSubmitEdit;
+  children: React.ReactNode;
+}) {
+  const [editing, setEditing]       = useState(false);
+  const [draft, setDraft]           = useState(raw);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError]           = useState("");
+
+  if (!editable || !onSubmitEdit) return <>{children}</>;
+
+  if (editing) {
+    return (
+      <div>
+        <textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Escape") { setEditing(false); setDraft(raw); setError(""); } }}
+          rows={Math.max(2, draft.split("\n").length + 1)}
+          autoFocus
+          className="w-full text-sm text-gray-800 leading-7 bg-amber-50/40 border-2 border-dashed border-amber-300 rounded-lg p-3 focus:outline-none focus:border-amber-400 transition-colors resize-y font-sans"
+        />
+        {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+        <div className="flex items-center gap-2 mt-1.5">
+          <button
+            onClick={() => { setEditing(false); setDraft(raw); setError(""); }}
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2.5 py-1 rounded-lg hover:bg-stone-100 transition-colors"
+          >
+            <X size={11} /> Cancel
+          </button>
+          <button
+            onClick={async () => {
+              if (draft === raw) { setEditing(false); return; }
+              setSubmitting(true); setError("");
+              const result = await onSubmitEdit(raw, draft);
+              setSubmitting(false);
+              if (!result.ok) { setError(result.error || "Failed"); return; }
+              setEditing(false);
+            }}
+            disabled={submitting || draft === raw}
+            className="flex items-center gap-1 px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+          >
+            {submitting ? <Loader size={11} className="animate-spin" /> : <Check size={11} />}
+            {submitting ? "Submitting…" : "Confirm"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group relative -mx-2 px-2 rounded-lg hover:bg-stone-50 transition-colors">
+      {children}
+      <button
+        onClick={() => { setDraft(raw); setEditing(true); }}
+        title="Edit this in place"
+        className="absolute -left-5 top-0.5 opacity-0 group-hover:opacity-100 text-stone-300 hover:text-sky-500 transition-opacity"
+      >
+        <Pencil size={13} />
+      </button>
+    </div>
+  );
+}
+
 // ── Public component ─────────────────────────────────────────────────────────
 
 export function MarkdownPreview({
-  content, comments, onOpen,
+  content, comments, onOpen, editable = false, onSubmitEdit,
 }: {
   content: string;
   comments: Comment[];
   onOpen: OnOpen;
+  editable?: boolean;
+  onSubmitEdit?: OnSubmitEdit;
 }) {
   const blocks = useMemo(() => parseBlocks(content), [content]);
 
@@ -225,26 +303,31 @@ export function MarkdownPreview({
           const cls = b.level === 2
             ? "text-lg font-bold text-gray-900 mt-2"
             : "text-base font-semibold text-gray-900 mt-2";
-          return b.level === 2 ? (
-            <h2 key={i} className={cls}><InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} /></h2>
+          const inner = b.level === 2 ? (
+            <h2 className={cls}><InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} /></h2>
           ) : (
-            <h3 key={i} className={cls}><InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} /></h3>
+            <h3 className={cls}><InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} /></h3>
           );
+          return <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit}>{inner}</EditableBlock>;
         }
         if (b.type === "paragraph") {
           return (
-            <p key={i} className="text-sm text-gray-800 leading-7">
-              <InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} />
-            </p>
+            <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit}>
+              <p className="text-sm text-gray-800 leading-7">
+                <InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} />
+              </p>
+            </EditableBlock>
           );
         }
         if (b.type === "list") {
           return (
-            <ul key={i} className="list-disc pl-5 space-y-1 text-sm text-gray-800 leading-7">
-              {b.items.map((item, j) => (
-                <li key={j}><InlineRun tokens={tokenizeInline(item)} comments={comments} onOpen={onOpen} /></li>
-              ))}
-            </ul>
+            <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit}>
+              <ul className="list-disc pl-5 space-y-1 text-sm text-gray-800 leading-7">
+                {b.items.map((item, j) => (
+                  <li key={j}><InlineRun tokens={tokenizeInline(item)} comments={comments} onOpen={onOpen} /></li>
+                ))}
+              </ul>
+            </EditableBlock>
           );
         }
         if (b.type === "image") {
