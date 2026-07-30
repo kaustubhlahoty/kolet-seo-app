@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon, Trash2, X, GitPullRequest, GitMerge } from "lucide-react";
 import { diffWords } from "@/lib/diff";
+import { placeholdersPreserved } from "@/lib/image-placeholders";
 import type { Comment } from "@/lib/types";
 import { MarkdownPreview } from "@/lib/markdown-preview";
 
@@ -324,10 +325,17 @@ export default function ArticleDetailPage() {
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [aiError, setAiError]           = useState('');
   const aiFormRef = useRef<HTMLDivElement>(null);
+  // Manual suggest-edit-selection (type your own replacement, no AI, no full Edit-directly)
+  const [showManualForm, setShowManualForm]   = useState(false);
+  const [manualDraft, setManualDraft]         = useState('');
+  const [manualError, setManualError]         = useState('');
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const manualFormRef = useRef<HTMLDivElement>(null);
   // Direct edit-in-place with before/after diff preview
   const [editStage, setEditStage]     = useState<'idle' | 'editing' | 'diff'>('idle');
   const [editOriginal, setEditOriginal] = useState('');
   const [editDraft, setEditDraft]       = useState('');
+  const [diffError, setDiffError]       = useState('');
   // Content save state
   const [isDirty, setIsDirty]           = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
@@ -456,16 +464,16 @@ export default function ArticleDetailPage() {
     function onGlobalMouseUp() {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.toString().trim()) {
-        if (!showInlineForm && !showAiForm) setSelectionPos(null);
+        if (!showInlineForm && !showAiForm && !showManualForm) setSelectionPos(null);
       }
     }
     document.addEventListener('mouseup', onGlobalMouseUp);
     return () => document.removeEventListener('mouseup', onGlobalMouseUp);
-  }, [reviewMode, showInlineForm, showAiForm]);
+  }, [reviewMode, showInlineForm, showAiForm, showManualForm]);
 
   // Dismiss the floating inline form when clicking outside it
   useEffect(() => {
-    if (!showInlineForm && !showAiForm) return;
+    if (!showInlineForm && !showAiForm && !showManualForm) return;
     function onMouseDown(e: MouseEvent) {
       if (showInlineForm && inlineFormRef.current && !inlineFormRef.current.contains(e.target as Node)) {
         dismissInlineComment();
@@ -473,10 +481,13 @@ export default function ArticleDetailPage() {
       if (showAiForm && aiFormRef.current && !aiFormRef.current.contains(e.target as Node)) {
         dismissAiForm();
       }
+      if (showManualForm && manualFormRef.current && !manualFormRef.current.contains(e.target as Node)) {
+        dismissManualForm();
+      }
     }
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [showInlineForm, showAiForm]);
+  }, [showInlineForm, showAiForm, showManualForm]);
 
   // Dismiss the inline comment-thread popover when clicking outside it
   useEffect(() => {
@@ -556,6 +567,7 @@ export default function ArticleDetailPage() {
     setSelectionPos({ x: rect.left + rect.width / 2, y: rect.top });
     setShowInlineForm(false);
     setShowAiForm(false);
+    setShowManualForm(false);
   }
 
   function openInlineForm() {
@@ -596,6 +608,60 @@ export default function ArticleDetailPage() {
     setAiError('');
   }
 
+  function openManualForm() {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? '';
+    setPendingQuote(text);
+    setManualDraft(text);
+    setManualError('');
+    setShowManualForm(true);
+  }
+
+  function dismissManualForm() {
+    setSelectionPos(null);
+    setShowManualForm(false);
+    setPendingQuote('');
+    setManualDraft('');
+    setManualError('');
+  }
+
+  async function submitManualEdit() {
+    if (!pendingQuote || !manualDraft.trim() || manualDraft === pendingQuote) return;
+    const placeholderCheck = placeholdersPreserved(pendingQuote, manualDraft);
+    if (!placeholderCheck.ok) {
+      setManualError(`This would remove an image reference (${placeholderCheck.missing.join(', ')}).`);
+      return;
+    }
+    setManualSubmitting(true);
+    if (isAdmin) {
+      const updated = rawContent.replace(pendingQuote, manualDraft);
+      setRawContent(updated);
+      setContentKey(k => k + 1);
+      try {
+        await fetch(`${API_BASE}/api/articles/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: updated }),
+        });
+      } catch {}
+      setManualSubmitting(false);
+      dismissManualForm();
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ original_text: pendingQuote, proposed_text: manualDraft, source: 'direct_edit' }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setManualError(data.error || 'Failed to submit'); setManualSubmitting(false); return; }
+      loadSuggestions();
+    } catch {}
+    setManualSubmitting(false);
+    dismissManualForm();
+  }
+
   async function requestAiRewrite() {
     if (!pendingQuote) return;
     setAiLoading(true); setAiError(''); setAiSuggestion(null);
@@ -617,6 +683,11 @@ export default function ArticleDetailPage() {
 
   async function acceptAiRewrite() {
     if (!aiSuggestion || !pendingQuote) return;
+    const placeholderCheck = placeholdersPreserved(pendingQuote, aiSuggestion);
+    if (!placeholderCheck.ok) {
+      setAiError(`This would remove an image reference (${placeholderCheck.missing.join(', ')}) — try again.`);
+      return;
+    }
     if (isAdmin) {
       const updated = rawContent.replace(pendingQuote, aiSuggestion);
       setRawContent(updated);
@@ -632,11 +703,13 @@ export default function ArticleDetailPage() {
       return;
     }
     try {
-      await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ original_text: pendingQuote, proposed_text: aiSuggestion, source: 'ai_rewrite' }),
       });
+      const data = await res.json();
+      if (!res.ok) { setAiError(data.error || 'Failed to submit'); return; }
       loadSuggestions();
     } catch {}
     dismissAiForm();
@@ -648,23 +721,32 @@ export default function ArticleDetailPage() {
     setEditOriginal(sections.content);
     setEditDraft(sections.content);
     setEditStage('editing');
+    setDiffError('');
   }
 
   function previewEditChanges() {
     setEditStage('diff');
+    setDiffError('');
   }
 
   function keepEditing() {
     setEditStage('editing');
+    setDiffError('');
   }
 
   function discardEdit() {
     setEditStage('idle');
     setEditOriginal('');
     setEditDraft('');
+    setDiffError('');
   }
 
   async function acceptEdit() {
+    const placeholderCheck = placeholdersPreserved(editOriginal, editDraft);
+    if (!placeholderCheck.ok) {
+      setDiffError(`This would remove an image reference (${placeholderCheck.missing.join(', ')}) — go back and keep it intact.`);
+      return;
+    }
     if (isAdmin) {
       const updated = rawContent.replace(editOriginal, editDraft);
       setRawContent(updated);
@@ -680,11 +762,13 @@ export default function ArticleDetailPage() {
       return;
     }
     try {
-      await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ original_text: editOriginal, proposed_text: editDraft, source: 'direct_edit' }),
       });
+      const data = await res.json();
+      if (!res.ok) { setDiffError(data.error || 'Failed to submit'); return; }
       loadSuggestions();
     } catch {}
     discardEdit();
@@ -1173,6 +1257,11 @@ export default function ArticleDetailPage() {
                     return <span key={i} className="bg-green-100 text-green-800">{op.value}</span>;
                   })}
                 </div>
+                {diffError && (
+                  <p className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <AlertTriangle size={12} /> {diffError}
+                  </p>
+                )}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <button
@@ -1315,7 +1404,7 @@ export default function ArticleDetailPage() {
       })()}
 
       {/* Floating selection action buttons */}
-      {selectionPos && !showInlineForm && !showAiForm && (
+      {selectionPos && !showInlineForm && !showAiForm && !showManualForm && (
         <div
           style={{ position: 'fixed', left: selectionPos.x, top: selectionPos.y - 40, transform: 'translateX(-50%)', zIndex: 9999 }}
           className="flex items-center gap-1.5"
@@ -1329,6 +1418,13 @@ export default function ArticleDetailPage() {
           </button>
           <button
             onMouseDown={e => e.preventDefault()}
+            onClick={openManualForm}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-full shadow-lg transition-colors whitespace-nowrap"
+          >
+            <Pencil size={11} /> Suggest edit
+          </button>
+          <button
+            onMouseDown={e => e.preventDefault()}
             onClick={openAiForm}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold rounded-full shadow-lg transition-colors whitespace-nowrap"
           >
@@ -1336,6 +1432,54 @@ export default function ArticleDetailPage() {
           </button>
         </div>
       )}
+
+      {/* Floating manual suggest-edit form */}
+      {showManualForm && selectionPos && (() => {
+        const FORM_W = 320;
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+        const safeLeft = Math.max(FORM_W / 2 + 12, Math.min(selectionPos.x, vw - FORM_W / 2 - 12));
+        const safeTop  = Math.max(12, Math.min(selectionPos.y - 8, vh - 320));
+        return (
+          <div
+            ref={manualFormRef}
+            style={{ position: 'fixed', left: safeLeft, top: safeTop, transform: 'translateX(-50%)', zIndex: 9999 }}
+            className="w-80 bg-white border border-stone-300 rounded-xl shadow-2xl p-4 space-y-3"
+          >
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-600">
+              <Pencil size={12} /> Suggest an edit
+            </div>
+            <p className="text-xs text-gray-400">Type your own replacement for the highlighted text below.</p>
+            <textarea
+              value={manualDraft}
+              onChange={e => setManualDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitManualEdit(); }}
+              rows={4}
+              autoFocus
+              className="w-full text-xs bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 focus:outline-none focus:border-sky-400 transition-colors resize-none"
+            />
+            {manualError && <p className="text-xs text-red-500">{manualError}</p>}
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onMouseDown={e => e.preventDefault()}
+                onClick={dismissManualForm}
+                className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onMouseDown={e => e.preventDefault()}
+                onClick={submitManualEdit}
+                disabled={manualSubmitting || !manualDraft.trim() || manualDraft === pendingQuote}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {manualSubmitting ? <Loader size={11} className="animate-spin" /> : isAdmin ? <Check size={11} /> : <GitPullRequest size={11} />}
+                {manualSubmitting ? 'Submitting…' : isAdmin ? 'Apply' : 'Submit for approval'}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Floating AI rewrite-selection form */}
       {showAiForm && selectionPos && (() => {

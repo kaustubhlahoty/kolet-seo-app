@@ -3,6 +3,7 @@ import { sql } from '@/lib/db';
 import { auth } from '@/auth';
 import { randomUUID } from 'crypto';
 import { notifySuggestionSubmitted } from '@/lib/notify';
+import { placeholdersPreserved } from '@/lib/image-placeholders';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -19,6 +20,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
   if (original_text === proposed_text) {
     return NextResponse.json({ error: 'No change to suggest' }, { status: 400 });
+  }
+  const placeholderCheck = placeholdersPreserved(original_text, proposed_text);
+  if (!placeholderCheck.ok) {
+    return NextResponse.json({
+      error: `This edit removes an image reference (${placeholderCheck.missing.join(', ')}) — keep the placeholder intact and only change the surrounding text.`,
+    }, { status: 400 });
   }
 
   const session = await auth();

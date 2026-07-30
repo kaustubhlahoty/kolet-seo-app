@@ -48,7 +48,12 @@ type Block =
   | { type: "list"; items: string[] }
   | { type: "image"; alt: string; src: string }
   | { type: "promo"; title: string; ctaText: string; ctaHref: string; body: string }
+  | { type: "table"; header: string[]; rows: string[][] }
   | { type: "hr" };
+
+function parseTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+}
 
 function parseBlocks(markdown: string): Block[] {
   const lines = (markdown || "").replace(/\r\n/g, "\n").split("\n");
@@ -60,6 +65,8 @@ function parseBlocks(markdown: string): Block[] {
   const isPromo     = (l: string) => /^>\s*\[!PROMO/.test(l);
   const isHr        = (l: string) => /^-{3,}\s*$/.test(l.trim());
   const isListItem  = (l: string) => /^[-*]\s+/.test(l);
+  const isTableRow  = (l: string) => /^\s*\|.*\|\s*$/.test(l);
+  const isTableSep  = (l: string) => isTableRow(l) && /^[\s|:-]+$/.test(l) && l.includes("-");
 
   while (i < lines.length) {
     const line = lines[i];
@@ -97,6 +104,18 @@ function parseBlocks(markdown: string): Block[] {
       i++; continue;
     }
 
+    if (isTableRow(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const header = parseTableRow(line);
+      let j = i + 2;
+      const rows: string[][] = [];
+      while (j < lines.length && isTableRow(lines[j])) {
+        rows.push(parseTableRow(lines[j]));
+        j++;
+      }
+      blocks.push({ type: "table", header, rows });
+      i = j; continue;
+    }
+
     if (isListItem(line)) {
       const items: string[] = [];
       while (i < lines.length && isListItem(lines[i])) {
@@ -107,10 +126,13 @@ function parseBlocks(markdown: string): Block[] {
       continue;
     }
 
+    const looksLikeTableStart = (idx: number) => isTableRow(lines[idx]) && idx + 1 < lines.length && isTableSep(lines[idx + 1]);
+
     const paraLines: string[] = [];
     while (
       i < lines.length && lines[i].trim() &&
-      !isHeading(lines[i]) && !isImage(lines[i]) && !isPromo(lines[i]) && !isHr(lines[i]) && !isListItem(lines[i])
+      !isHeading(lines[i]) && !isImage(lines[i]) && !isPromo(lines[i]) && !isHr(lines[i]) &&
+      !isListItem(lines[i]) && !looksLikeTableStart(i)
     ) {
       paraLines.push(lines[i]);
       i++;
@@ -246,6 +268,34 @@ export function MarkdownPreview({
               <span className="shrink-0 text-xs font-semibold bg-kolet-yellow text-kolet-black px-3 py-1.5 rounded-lg whitespace-nowrap">
                 {decodeEntities(b.ctaText)}
               </span>
+            </div>
+          );
+        }
+        if (b.type === "table") {
+          return (
+            <div key={i} className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr>
+                    {b.header.map((h, hi) => (
+                      <th key={hi} className="text-left font-semibold text-gray-900 bg-stone-100 border border-stone-200 px-3 py-2 whitespace-nowrap">
+                        <InlineRun tokens={tokenizeInline(h)} comments={comments} onOpen={onOpen} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {b.rows.map((row, ri) => (
+                    <tr key={ri} className={ri % 2 === 1 ? "bg-stone-50" : ""}>
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="text-gray-700 border border-stone-200 px-3 py-2 align-top">
+                          <InlineRun tokens={tokenizeInline(cell)} comments={comments} onOpen={onOpen} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           );
         }
