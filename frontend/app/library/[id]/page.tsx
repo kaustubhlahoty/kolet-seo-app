@@ -2,8 +2,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon, Trash2, X } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon, Trash2, X, GitPullRequest, GitMerge } from "lucide-react";
 import { diffWords } from "@/lib/diff";
+import type { Comment } from "@/lib/types";
+import { MarkdownPreview } from "@/lib/markdown-preview";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -219,73 +222,39 @@ function ContentField({
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Comment = {
+type Suggestion = {
   id: string;
   article_id: string;
+  source: "direct_edit" | "ai_rewrite";
+  original_text: string;
+  proposed_text: string;
   author: string;
-  body: string;
-  quote: string;
+  status: "pending" | "approved" | "rejected";
   created_at: string;
-  resolved: boolean;
   resolved_at: string | null;
-  parent_id: string | null;
+  resolved_by: string | null;
 };
 
-// ── Quote highlight helpers ───────────────────────────────────────────────────
-
-type Segment = { text: string; comment: Comment | null };
-
-function segmentText(text: string, comments: Comment[]): Segment[] {
-  const candidates = comments.filter(c => c.quote?.trim() && text.includes(c.quote.trim()));
-  if (!candidates.length) return [{ text, comment: null }];
-
-  const marks: Array<{ start: number; end: number; comment: Comment }> = [];
-  for (const c of candidates) {
-    const q = c.quote.trim();
-    let idx = text.indexOf(q);
-    while (idx !== -1) {
-      marks.push({ start: idx, end: idx + q.length, comment: c });
-      idx = text.indexOf(q, idx + 1);
-    }
-  }
-  marks.sort((a, b) => a.start - b.start);
-
-  const segments: Segment[] = [];
-  let cursor = 0;
-  for (const mark of marks) {
-    if (mark.start < cursor) continue; // skip overlaps
-    if (mark.start > cursor) segments.push({ text: text.slice(cursor, mark.start), comment: null });
-    segments.push({ text: text.slice(mark.start, mark.end), comment: mark.comment });
-    cursor = mark.end;
-  }
-  if (cursor < text.length) segments.push({ text: text.slice(cursor), comment: null });
-  return segments;
-}
-
-function HighlightedText({
-  text, comments, onOpen,
-}: {
-  text: string;
-  comments: Comment[];
-  onOpen: (c: Comment, rect: DOMRect) => void;
-}) {
-  const segments = segmentText(text, comments);
+/** GitHub-style split diff: removed words in red on the left, added words in green on the right. */
+function SideBySideDiff({ original, proposed }: { original: string; proposed: string }) {
+  const ops = diffWords(original, proposed);
   return (
-    <>
-      {segments.map((seg, i) =>
-        seg.comment ? (
-          <mark
-            key={i}
-            className="bg-kolet-yellow/30 border-b-2 border-kolet-yellow/70 rounded-sm cursor-pointer not-italic hover:bg-kolet-yellow/50 transition-colors"
-            onClick={e => { e.stopPropagation(); onOpen(seg.comment!, (e.currentTarget as HTMLElement).getBoundingClientRect()); }}
-          >
-            {seg.text}
-          </mark>
-        ) : (
-          <span key={i}>{seg.text}</span>
-        )
-      )}
-    </>
+    <div className="grid grid-cols-2 gap-3">
+      <div className="text-xs leading-relaxed whitespace-pre-wrap bg-red-50/60 border border-red-100 rounded-lg p-3">
+        {ops.filter(op => op.type !== 'added').map((op, i) =>
+          op.type === 'removed'
+            ? <span key={i} className="bg-red-100 text-red-700 line-through">{op.value}</span>
+            : <span key={i}>{op.value}</span>
+        )}
+      </div>
+      <div className="text-xs leading-relaxed whitespace-pre-wrap bg-green-50/60 border border-green-100 rounded-lg p-3">
+        {ops.filter(op => op.type !== 'removed').map((op, i) =>
+          op.type === 'added'
+            ? <span key={i} className="bg-green-100 text-green-800">{op.value}</span>
+            : <span key={i}>{op.value}</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -294,6 +263,12 @@ function HighlightedText({
 export default function ArticleDetailPage() {
   const router = useRouter();
   const { id } = useParams() as { id: string };
+  const { data: session } = useSession();
+  const isAdmin = (session?.user as any)?.role === "admin";
+
+  const [suggestions, setSuggestions]   = useState<Suggestion[]>([]);
+  const [suggestionActioning, setSuggestionActioning] = useState<string | null>(null);
+  const [suggestionError, setSuggestionError] = useState("");
 
   const [rawContent, setRawContent]   = useState("");
   const [meta, setMeta]               = useState<any>(null);
@@ -326,7 +301,7 @@ export default function ArticleDetailPage() {
   const [commentAuthor, setCommentAuthor] = useState('');
   const [commentBody, setCommentBody]   = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
-  const [showResolved, setShowResolved] = useState(false);
+  const [showResolvedSuggestions, setShowResolvedSuggestions] = useState(false);
   // Replies
   const [replyingTo, setReplyingTo]     = useState<string | null>(null);
   const [replyBody, setReplyBody]       = useState('');
@@ -433,6 +408,47 @@ export default function ArticleDetailPage() {
       })
       .catch(() => {});
   }, [id]);
+
+  const loadSuggestions = useCallback(() => {
+    fetch(`${API_BASE}/api/articles/${id}/suggestions`)
+      .then(r => r.json())
+      .then(d => setSuggestions(d.suggestions || []))
+      .catch(() => {});
+  }, [id]);
+
+  useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
+
+  async function approveSuggestion(suggestionId: string) {
+    setSuggestionActioning(suggestionId);
+    setSuggestionError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions/${suggestionId}/approve`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Approve failed");
+      setRawContent(data.content);
+      setContentKey(k => k + 1);
+      loadSuggestions();
+    } catch (e: any) {
+      setSuggestionError(e.message);
+    } finally {
+      setSuggestionActioning(null);
+    }
+  }
+
+  async function rejectSuggestion(suggestionId: string) {
+    setSuggestionActioning(suggestionId);
+    setSuggestionError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions/${suggestionId}/reject`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reject failed");
+      loadSuggestions();
+    } catch (e: any) {
+      setSuggestionError(e.message);
+    } finally {
+      setSuggestionActioning(null);
+    }
+  }
 
   // In review mode, clear the floating button when the user's selection collapses
   useEffect(() => {
@@ -601,15 +617,27 @@ export default function ArticleDetailPage() {
 
   async function acceptAiRewrite() {
     if (!aiSuggestion || !pendingQuote) return;
-    const updated = rawContent.replace(pendingQuote, aiSuggestion);
-    setRawContent(updated);
-    setContentKey(k => k + 1);
+    if (isAdmin) {
+      const updated = rawContent.replace(pendingQuote, aiSuggestion);
+      setRawContent(updated);
+      setContentKey(k => k + 1);
+      try {
+        await fetch(`${API_BASE}/api/articles/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: updated }),
+        });
+      } catch {}
+      dismissAiForm();
+      return;
+    }
     try {
-      await fetch(`${API_BASE}/api/articles/${id}`, {
-        method: 'PATCH',
+      await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: updated }),
+        body: JSON.stringify({ original_text: pendingQuote, proposed_text: aiSuggestion, source: 'ai_rewrite' }),
       });
+      loadSuggestions();
     } catch {}
     dismissAiForm();
   }
@@ -637,15 +665,27 @@ export default function ArticleDetailPage() {
   }
 
   async function acceptEdit() {
-    const updated = rawContent.replace(editOriginal, editDraft);
-    setRawContent(updated);
-    setContentKey(k => k + 1);
+    if (isAdmin) {
+      const updated = rawContent.replace(editOriginal, editDraft);
+      setRawContent(updated);
+      setContentKey(k => k + 1);
+      try {
+        await fetch(`${API_BASE}/api/articles/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: updated }),
+        });
+      } catch {}
+      discardEdit();
+      return;
+    }
     try {
-      await fetch(`${API_BASE}/api/articles/${id}`, {
-        method: 'PATCH',
+      await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: updated }),
+        body: JSON.stringify({ original_text: editOriginal, proposed_text: editDraft, source: 'direct_edit' }),
       });
+      loadSuggestions();
     } catch {}
     discardEdit();
   }
@@ -1010,6 +1050,16 @@ export default function ArticleDetailPage() {
           <MessageSquare size={11} />
           {reviewMode ? 'Exit Review' : 'Review Mode'}
         </button>
+        {comments.filter(c => !c.resolved && !c.parent_id).length > 0 && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500 text-white font-semibold">
+            {comments.filter(c => !c.resolved && !c.parent_id).length} open
+          </span>
+        )}
+        {suggestions.filter(s => s.status === 'pending').length > 0 && (
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-kolet-yellow/20 text-kolet-black border border-kolet-yellow/40 font-semibold">
+            <GitPullRequest size={10} /> {suggestions.filter(s => s.status === 'pending').length} pending
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-2.5">
           {saveError && <span className="text-xs text-red-400">{saveError}</span>}
@@ -1073,22 +1123,18 @@ export default function ArticleDetailPage() {
             )}
             {sections.intro && (
               <div className="text-gray-600 text-base leading-relaxed mb-6 border-l-4 border-kolet-yellow pl-4">
-                <HighlightedText text={sections.intro} comments={openQuoted} onOpen={openThread} />
+                <MarkdownPreview content={sections.intro} comments={openQuoted} onOpen={openThread} />
               </div>
             )}
             {sections.keyTakeaways && (
               <div className="mb-6">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Key Takeaways</p>
-                <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
-                  <HighlightedText text={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} />
-                </pre>
+                <MarkdownPreview content={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} />
               </div>
             )}
 
             {editStage === 'idle' && (
-              <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7">
-                <HighlightedText text={sections.content} comments={openQuoted} onOpen={openThread} />
-              </div>
+              <MarkdownPreview content={sections.content} comments={openQuoted} onOpen={openThread} />
             )}
 
             {editStage === 'editing' && (
@@ -1146,7 +1192,7 @@ export default function ArticleDetailPage() {
                     onClick={acceptEdit}
                     className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors"
                   >
-                    <Check size={11} /> Accept changes
+                    {isAdmin ? <><Check size={11} /> Apply changes</> : <><GitPullRequest size={11} /> Submit for approval</>}
                   </button>
                 </div>
               </div>
@@ -1372,7 +1418,7 @@ export default function ArticleDetailPage() {
                       onClick={acceptAiRewrite}
                       className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors"
                     >
-                      <Check size={11} /> Accept
+                      {isAdmin ? <><Check size={11} /> Apply</> : <><GitPullRequest size={11} /> Submit for approval</>}
                     </button>
                   </div>
                 </div>
@@ -1669,227 +1715,140 @@ export default function ArticleDetailPage() {
         </div>
       </div>
 
-      {/* ── Comments Panel ── */}
+      {/* ── Suggested Edits (merge-request style review) ── */}
       {(() => {
-        const topLevel = comments.filter(c => !c.parent_id);
-        const replies  = comments.filter(c => !!c.parent_id);
-        const open     = topLevel.filter(c => !c.resolved);
-        const resolved = topLevel.filter(c => c.resolved);
+        const pendingSuggestions  = suggestions.filter(s => s.status === 'pending');
+        const resolvedSuggestions = suggestions.filter(s => s.status !== 'pending');
         return (
           <div className="mt-6">
             <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm">
-              {/* Header */}
               <div className="px-5 py-4 border-b border-stone-200 flex items-center gap-3">
-                <MessageSquare size={16} className="text-kolet-yellow" />
-                <h2 className="text-sm font-semibold text-gray-900">Review Comments</h2>
-                {open.length > 0 && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500 text-white font-semibold">{open.length} open</span>
+                <GitPullRequest size={16} className="text-kolet-yellow" />
+                <h2 className="text-sm font-semibold text-gray-900">Suggested Edits</h2>
+                {pendingSuggestions.length > 0 && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500 text-white font-semibold">{pendingSuggestions.length} pending</span>
                 )}
               </div>
 
               <div className="p-5 space-y-4">
-                {/* Open comment threads */}
-                {open.length === 0 && resolved.length === 0 && (
-                  <p className="text-xs text-gray-400">No comments yet. Use the form below to flag a change without editing the article directly.</p>
+                {suggestionError && (
+                  <div className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <AlertTriangle size={12} /> {suggestionError}
+                  </div>
                 )}
-                {open.map(c => {
-                  const threadReplies = replies.filter(r => r.parent_id === c.id);
-                  const isReplying = replyingTo === c.id;
-                  return (
-                    <div key={c.id} className="space-y-1.5">
-                      {/* Top-level comment */}
-                      <div className="flex gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-semibold text-gray-900">{c.author}</span>
-                            <span className="text-xs text-gray-400">{new Date(c.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-                          {c.quote && (
-                            <div className="text-xs text-gray-500 bg-white border-l-2 border-kolet-yellow px-3 py-2 mb-2 rounded-r-md leading-relaxed italic">
-                              &ldquo;{c.quote}&rdquo;
-                            </div>
-                          )}
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{c.body}</p>
-                        </div>
-                        <div className="shrink-0 flex flex-col items-end gap-1.5">
-                          <button
-                            onClick={() => resolveComment(c.id, true)}
-                            title="Mark as resolved"
-                            className="flex items-center gap-1 text-xs text-gray-400 hover:text-emerald-500 transition-colors px-2 py-1 rounded-lg hover:bg-emerald-50 border border-transparent hover:border-emerald-200"
-                          >
-                            <CheckCheck size={13} /> Resolve
-                          </button>
-                          <button
-                            onClick={() => { setReplyingTo(isReplying ? null : c.id); setReplyBody(''); }}
-                            className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors ${
-                              isReplying
-                                ? 'text-kolet-yellow border-kolet-yellow bg-kolet-yellow/10'
-                                : 'text-gray-400 border-transparent hover:text-gray-700 hover:bg-stone-100'
-                            }`}
-                          >
-                            <Send size={11} /> Reply
-                          </button>
-                          <button
-                            onClick={() => deleteComment(c.id, threadReplies.map(r => r.id))}
-                            title="Delete comment"
-                            className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors px-2 py-1 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
-                          >
-                            <Trash2 size={11} /> Delete
-                          </button>
-                        </div>
+
+                {suggestions.length === 0 && (
+                  <p className="text-xs text-gray-400">
+                    No suggested edits yet. In Review Mode, select text and use &ldquo;Edit directly&rdquo; or &ldquo;Ask AI&rdquo; to propose a change.
+                  </p>
+                )}
+
+                {pendingSuggestions.map(s => (
+                  <div key={s.id} className="space-y-2 p-3 bg-stone-50 border border-stone-200 rounded-lg">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <span className="font-semibold text-gray-900">{s.author}</span>
+                        <span>{new Date(s.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span className="px-1.5 py-0.5 rounded-full bg-stone-200 text-gray-500">
+                          {s.source === 'ai_rewrite' ? '✨ AI rewrite' : '✏️ Direct edit'}
+                        </span>
                       </div>
-
-                      {/* Replies */}
-                      {threadReplies.map(r => (
-                        <div key={r.id} className="ml-6 flex gap-3 p-3 bg-stone-50 border border-stone-200 rounded-lg">
-                          <div className="w-0.5 bg-stone-300 rounded-full shrink-0 self-stretch" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs font-semibold text-gray-900">{r.author}</span>
-                              <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                            </div>
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{r.body}</p>
-                          </div>
+                      {isAdmin ? (
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={() => deleteComment(r.id)}
-                            title="Delete reply"
-                            className="shrink-0 self-start text-gray-300 hover:text-red-500 p-1 rounded-lg hover:bg-red-50 transition-colors"
+                            onClick={() => rejectSuggestion(s.id)}
+                            disabled={suggestionActioning === s.id}
+                            className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-40"
                           >
-                            <Trash2 size={11} />
+                            <X size={12} /> Reject
+                          </button>
+                          <button
+                            onClick={() => approveSuggestion(s.id)}
+                            disabled={suggestionActioning === s.id}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
+                          >
+                            {suggestionActioning === s.id ? <Loader size={11} className="animate-spin" /> : <GitMerge size={11} />}
+                            Merge
                           </button>
                         </div>
-                      ))}
-
-                      {/* Inline reply form */}
-                      {isReplying && (
-                        <div className="ml-6 p-3 bg-stone-50 border border-stone-200 rounded-lg space-y-2">
-                          <textarea
-                            value={replyBody}
-                            onChange={e => setReplyBody(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitReply(c.id); }}
-                            placeholder="Write a reply…"
-                            rows={2}
-                            autoFocus
-                            className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors resize-none"
-                          />
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs text-gray-400">⌘↵ to post</span>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => { setReplyingTo(null); setReplyBody(''); }}
-                                className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-200 transition-colors"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                onClick={() => submitReply(c.id)}
-                                disabled={replySubmitting || !replyBody.trim()}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
-                              >
-                                {replySubmitting ? <Loader size={11} className="animate-spin" /> : <Send size={11} />}
-                                {replySubmitting ? 'Posting…' : 'Post Reply'}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400 italic">Awaiting admin review</span>
                       )}
                     </div>
-                  );
-                })}
+                    <SideBySideDiff original={s.original_text} proposed={s.proposed_text} />
+                  </div>
+                ))}
 
-                {/* Resolved toggle */}
-                {resolved.length > 0 && (
+                {resolvedSuggestions.length > 0 && (
                   <div>
                     <button
-                      onClick={() => setShowResolved(v => !v)}
+                      onClick={() => setShowResolvedSuggestions(v => !v)}
                       className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
                     >
-                      {showResolved ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                      {showResolved ? 'Hide' : 'Show'} {resolved.length} resolved
+                      {showResolvedSuggestions ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      {showResolvedSuggestions ? 'Hide' : 'Show'} {resolvedSuggestions.length} resolved
                     </button>
-                    {showResolved && (
+                    {showResolvedSuggestions && (
                       <div className="mt-3 space-y-2">
-                        {resolved.map(c => {
-                          const threadReplies = replies.filter(r => r.parent_id === c.id);
-                          return (
-                            <div key={c.id} className="space-y-1">
-                              <div className="flex gap-3 p-3 bg-stone-50 border border-stone-200 rounded-lg opacity-60">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <CheckCheck size={11} className="text-emerald-500 shrink-0" />
-                                    <span className="text-xs font-semibold text-gray-500">{c.author}</span>
-                                    <span className="text-xs text-gray-400">{new Date(c.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
-                                  </div>
-                                  <p className="text-xs text-gray-500 line-through whitespace-pre-wrap">{c.body}</p>
-                                </div>
-                                <div className="shrink-0 flex flex-col items-end gap-1.5">
-                                  <button
-                                    onClick={() => resolveComment(c.id, false)}
-                                    className="text-xs text-gray-400 hover:text-orange-500 transition-colors px-2 py-1 rounded-lg hover:bg-orange-50 border border-transparent hover:border-orange-200"
-                                  >
-                                    Reopen
-                                  </button>
-                                  <button
-                                    onClick={() => deleteComment(c.id, threadReplies.map(r => r.id))}
-                                    title="Delete comment"
-                                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors px-2 py-1 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200"
-                                  >
-                                    <Trash2 size={11} /> Delete
-                                  </button>
-                                </div>
-                              </div>
-                              {threadReplies.map(r => (
-                                <div key={r.id} className="ml-6 flex gap-3 p-2.5 bg-stone-50 border border-stone-200 rounded-lg opacity-50">
-                                  <div className="w-0.5 bg-stone-300 rounded-full shrink-0 self-stretch" />
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 mb-0.5">
-                                      <span className="text-xs font-semibold text-gray-500">{r.author}</span>
-                                    </div>
-                                    <p className="text-xs text-gray-400 whitespace-pre-wrap">{r.body}</p>
-                                  </div>
-                                </div>
-                              ))}
+                        {resolvedSuggestions.map(s => (
+                          <div key={s.id} className="p-3 bg-stone-50 border border-stone-200 rounded-lg opacity-60">
+                            <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
+                              {s.status === 'approved' ? <CheckCheck size={11} className="text-emerald-500" /> : <X size={11} className="text-red-400" />}
+                              <span className="font-semibold text-gray-700">{s.author}</span>
+                              <span>{s.status} by {s.resolved_by}</span>
                             </div>
-                          );
-                        })}
+                            <p className="text-xs text-gray-400 line-through">{s.original_text}</p>
+                            <p className="text-xs text-gray-500">{s.proposed_text}</p>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
                 )}
-
-                {/* New comment form */}
-                <div className="pt-2 border-t border-stone-100 space-y-2">
-                  <input
-                    value={commentAuthor}
-                    onChange={e => setCommentAuthor(e.target.value)}
-                    placeholder="Your name (optional)"
-                    className="w-full bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors"
-                  />
-                  <textarea
-                    value={commentBody}
-                    onChange={e => setCommentBody(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitComment(); }}
-                    placeholder="Describe the change needed — e.g. 'The intro feels too long, trim to 2 sentences' or 'Fact-check the statistic in paragraph 3'…"
-                    rows={3}
-                    className="w-full bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors resize-y"
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-400">⌘↵ to submit</span>
-                    <button
-                      onClick={() => submitComment()}
-                      disabled={commentSubmitting || !commentBody.trim()}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-sm font-semibold rounded-lg transition-colors disabled:opacity-40"
-                    >
-                      {commentSubmitting ? <Loader size={13} className="animate-spin" /> : <Send size={13} />}
-                      {commentSubmitting ? 'Posting…' : 'Post Comment'}
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
         );
       })()}
+
+      {/* ── Add a general comment (not anchored to a passage) ── */}
+      <div className="mt-6">
+        <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-sm p-5 space-y-2">
+          <div className="flex items-center gap-2 mb-1">
+            <MessageSquare size={14} className="text-kolet-yellow" />
+            <h2 className="text-sm font-semibold text-gray-900">Add a general comment</h2>
+          </div>
+          <p className="text-xs text-gray-400 mb-2">
+            Not about a specific passage? Leave overall feedback here — or highlight text above in Review Mode to comment on something specific.
+          </p>
+          <input
+            value={commentAuthor}
+            onChange={e => setCommentAuthor(e.target.value)}
+            placeholder="Your name (optional)"
+            className="w-full bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors"
+          />
+          <textarea
+            value={commentBody}
+            onChange={e => setCommentBody(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitComment(); }}
+            placeholder="Overall feedback on this article…"
+            rows={3}
+            className="w-full bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-kolet-yellow transition-colors resize-y"
+          />
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-400">⌘↵ to submit</span>
+            <button
+              onClick={() => submitComment()}
+              disabled={commentSubmitting || !commentBody.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 bg-kolet-yellow hover:bg-kolet-yellow/85 text-kolet-black text-sm font-semibold rounded-lg transition-colors disabled:opacity-40"
+            >
+              {commentSubmitting ? <Loader size={13} className="animate-spin" /> : <Send size={13} />}
+              {commentSubmitting ? 'Posting…' : 'Post Comment'}
+            </button>
+          </div>
+        </div>
+      </div>
+
 
       {/* ── AI Review Panel ── */}
       <div className="mt-6">

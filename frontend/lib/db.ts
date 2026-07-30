@@ -18,6 +18,21 @@ async function ensureMigrations() {
     conn`ALTER TABLE articles ADD COLUMN IF NOT EXISTS content_backup TEXT`,
     conn`ALTER TABLE topics ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'`,
     conn`ALTER TABLE topics ADD COLUMN IF NOT EXISTS rationale TEXT`,
+    conn`
+      CREATE TABLE IF NOT EXISTS article_suggestions (
+        id TEXT PRIMARY KEY,
+        article_id TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'direct_edit',
+        original_text TEXT NOT NULL,
+        proposed_text TEXT NOT NULL,
+        author TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT NOW(),
+        resolved_at TIMESTAMP,
+        resolved_by TEXT
+      )
+    `,
+    conn`CREATE INDEX IF NOT EXISTS idx_suggestions_article_status ON article_suggestions(article_id, status)`,
   ]);
 }
 
@@ -88,6 +103,21 @@ export async function initDb() {
       drive_url TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
       published_at TIMESTAMP
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS article_suggestions (
+      id TEXT PRIMARY KEY,
+      article_id TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'direct_edit',
+      original_text TEXT NOT NULL,
+      proposed_text TEXT NOT NULL,
+      author TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT NOW(),
+      resolved_at TIMESTAMP,
+      resolved_by TEXT
     )
   `;
 

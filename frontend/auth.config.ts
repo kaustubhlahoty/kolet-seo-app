@@ -2,6 +2,9 @@ import type { NextAuthConfig } from "next-auth";
 
 function isReviewerApiAllowed(pathname: string, method: string): boolean {
   if (/^\/api\/articles\/[^/]+\/comments/.test(pathname)) return true;
+  // Suggestions collection only (list/create) — approve/reject sub-routes are admin-only
+  if (/^\/api\/articles\/[^/]+\/suggestions$/.test(pathname)) return true;
+  if (/^\/api\/articles\/[^/]+\/edit-selection$/.test(pathname) && method === "POST") return true;
   if (/^\/api\/articles\/[^/]+$/.test(pathname) && method === "GET") return true;
   if (pathname === "/api/articles" && method === "GET") return true;
   if (pathname === "/api/notifications/unread-comments") return true;
