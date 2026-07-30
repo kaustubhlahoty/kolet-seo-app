@@ -28,6 +28,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   `;
   const comment = rows[0];
 
+  // A top-level comment during proofreading means real feedback was left — the writer needs to act on it
+  if (!parent_id) {
+    await sql`UPDATE articles SET status='needs_revision' WHERE id=${id} AND status='needs_proofreading'`.catch(() => {});
+  }
+
   // Only notify for top-level comments (replies don't need a separate email)
   try {
     if (!parent_id) {

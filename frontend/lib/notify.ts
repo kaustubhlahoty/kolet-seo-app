@@ -49,6 +49,44 @@ export async function notifySlackPublished({
   }).catch(err => console.error('[notify] Slack error:', err));
 }
 
+export async function notifyNeedsProofreading({
+  title,
+  url,
+}: {
+  title: string;
+  url: string;
+}) {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) return;
+
+  await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `📝 *Ready for proofreading*\n\n*<${url}|${title}>*\n\nThe draft is done — could someone proofread and leave comments where needed?`,
+          },
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '👁 Review in Kolet SEO' },
+              url,
+              style: 'primary',
+            },
+          ],
+        },
+      ],
+    }),
+  }).catch(err => console.error('[notify] Slack error:', err));
+}
+
 const CIO_API_KEY = process.env.CIO_APP_API_KEY;
 const FROM_EMAIL  = process.env.NOTIFY_FROM_EMAIL || 'noreply@kolet.com';
 const APP_URL     = process.env.NEXT_PUBLIC_APP_URL || 'https://kolet-seo-app.vercel.app';

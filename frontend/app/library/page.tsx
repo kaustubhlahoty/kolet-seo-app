@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   BookOpen, Search, ExternalLink, CheckCircle, AlertCircle,
   Clock, Loader, Globe, Eye, Trash2, FileText, X, TrendingUp, BarChart2, Wand2, Languages, MessageSquare,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, Send, ThumbsUp
 } from "lucide-react";
 
 type Article = {
@@ -15,7 +15,7 @@ type Article = {
   lang: string;
   focus_keyword: string;
   target_zone: string;
-  status: "draft" | "reviewed" | "needs_revision" | "published";
+  status: "draft" | "needs_proofreading" | "needs_revision" | "approved" | "published";
   seo_score: number | null;
   eeat_score: number | null;
   audit_report: string | null;
@@ -43,10 +43,11 @@ type GscPage = { url: string; clicks: number; impressions: number; ctr: number; 
 type GscStatus = { configured: boolean; site_url: string };
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-  draft:          { label: "Draft",          color: "text-white bg-stone-600 border-stone-500",         icon: Clock },
-  needs_revision: { label: "Needs Revision", color: "text-white bg-orange-500 border-orange-600",       icon: AlertCircle },
-  reviewed:       { label: "Reviewed",       color: "text-kolet-black bg-kolet-yellow border-yellow-400", icon: CheckCircle },
-  published:      { label: "Published",      color: "text-white bg-emerald-600 border-emerald-700",     icon: CheckCircle },
+  draft:              { label: "Draft",              color: "text-white bg-stone-600 border-stone-500",          icon: Clock },
+  needs_proofreading: { label: "Needs Proofreading", color: "text-white bg-sky-600 border-sky-700",              icon: Eye },
+  needs_revision:     { label: "Needs Revision",     color: "text-white bg-orange-500 border-orange-600",        icon: AlertCircle },
+  approved:           { label: "Approved",           color: "text-white bg-teal-600 border-teal-700",            icon: ThumbsUp },
+  published:          { label: "Published",          color: "text-white bg-emerald-600 border-emerald-700",      icon: CheckCircle },
 };
 
 const LANG_FLAGS: Record<string, string>  = { en: "🇬🇧", fr: "🇫🇷", de: "🇩🇪", es: "🇪🇸", nl: "🇳🇱" };
@@ -147,6 +148,9 @@ export default function LibraryPage() {
   const [expandedAudits, setExpandedAudits] = useState<Set<string>>(new Set());
   const [markPublishId, setMarkPublishId] = useState<string | null>(null);
   const [markLiveUrl, setMarkLiveUrl]     = useState("");
+  const [sendingForProof, setSendingForProof] = useState<string | null>(null);
+  const [approving, setApproving]         = useState<string | null>(null);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
 
   function toggleAudit(id: string) {
     setExpandedAudits(prev => {
@@ -253,6 +257,36 @@ export default function LibraryPage() {
     }
   }
 
+  async function sendForProofreading(id: string) {
+    setSendingForProof(id);
+    setWorkflowError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/articles/${id}/send-for-proofreading`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) { setWorkflowError(data.error ?? "Failed to send for proofreading"); return; }
+      fetchArticles();
+    } catch (e: any) {
+      setWorkflowError(e.message);
+    } finally {
+      setSendingForProof(null);
+    }
+  }
+
+  async function approve(id: string) {
+    setApproving(id);
+    setWorkflowError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/articles/${id}/approve`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) { setWorkflowError(data.error ?? "Failed to approve"); return; }
+      fetchArticles();
+    } catch (e: any) {
+      setWorkflowError(e.message);
+    } finally {
+      setApproving(null);
+    }
+  }
+
   async function publish(id: string, live_url: string) {
     setPublishing(id);
     setPublishError(null);
@@ -352,7 +386,7 @@ export default function LibraryPage() {
                 Delete {selected.size} selected
               </button>
             )}
-            {["", "draft", "reviewed", "published"].map(s => (
+            {["", "draft", "needs_proofreading", "needs_revision", "approved", "published"].map(s => (
               <button key={s}
                 onClick={() => setFilter(s)}
                 className={`px-3 py-1.5 rounded-lg border transition-colors ${
@@ -496,6 +530,15 @@ export default function LibraryPage() {
           </div>
         )}
 
+        {/* Workflow error banner */}
+        {workflowError && (
+          <div className="flex items-start gap-2 bg-red-700 border border-red-800 rounded-lg px-4 py-3 text-sm text-white mb-4">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span className="flex-1">{workflowError}</span>
+            <button onClick={() => setWorkflowError(null)} className="text-white/70 hover:text-white ml-2">✕</button>
+          </div>
+        )}
+
         {/* Publish error banner */}
         {publishError && (
           <div className="flex items-start gap-2 bg-red-700 border border-red-800 rounded-lg px-4 py-3 text-sm text-white">
@@ -632,17 +675,38 @@ export default function LibraryPage() {
                           {expandedAudits.has(article.id) ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                         </button>
                       )}
-                      {article.status === "needs_revision" && (
+                      {article.status === "draft" && (
                         <button
-                          onClick={() => runRewrite(article.id, auditResults[article.id] ?? { issues: [], fixes: [], seo_checks: {}, seo_score: 0, eeat_score: null, verdict: "FAIL", brand_voice_score: null, depth_score: null, accuracy_score: null, structure_score: null })}
-                          disabled={rewriting === article.id}
-                          className="text-xs px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
+                          onClick={() => sendForProofreading(article.id)}
+                          disabled={sendingForProof === article.id}
+                          className="text-xs px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
                         >
-                          {rewriting === article.id ? <Loader size={10} className="animate-spin" /> : <Wand2 size={10} />}
-                          Rewrite
+                          {sendingForProof === article.id ? <Loader size={10} className="animate-spin" /> : <Send size={10} />}
+                          Send for proofreading
                         </button>
                       )}
-                      {article.status !== "published" && markPublishId !== article.id && (
+                      {article.status === "needs_proofreading" && (
+                        <button
+                          onClick={() => approve(article.id)}
+                          disabled={approving === article.id}
+                          className="text-xs px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
+                        >
+                          {approving === article.id ? <Loader size={10} className="animate-spin" /> : <ThumbsUp size={10} />}
+                          Approve for publishing
+                        </button>
+                      )}
+                      {article.status === "needs_revision" && (
+                        <button
+                          onClick={() => approve(article.id)}
+                          disabled={approving === article.id || !!commentCounts[article.id]}
+                          title={commentCounts[article.id] ? `Resolve ${commentCounts[article.id]} open comment${commentCounts[article.id] > 1 ? "s" : ""} first` : undefined}
+                          className="text-xs px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors flex items-center gap-1 disabled:opacity-40"
+                        >
+                          {approving === article.id ? <Loader size={10} className="animate-spin" /> : <ThumbsUp size={10} />}
+                          Mark revisions applied
+                        </button>
+                      )}
+                      {article.status === "approved" && markPublishId !== article.id && (
                         <button
                           onClick={() => { setMarkPublishId(article.id); setMarkLiveUrl(""); }}
                           className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-white transition-colors flex items-center gap-1"

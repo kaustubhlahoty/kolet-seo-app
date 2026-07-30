@@ -113,6 +113,40 @@ export default function AdminSettingsPage() {
     }
   }
 
+  // ── &nbsp; cleanup ──
+  const [nbspScanning, setNbspScanning] = useState(false);
+  const [nbspApplying, setNbspApplying] = useState(false);
+  const [nbspResult, setNbspResult]     = useState<any>(null);
+  const [nbspError, setNbspError]       = useState("");
+
+  async function scanNbsp() {
+    setNbspScanning(true); setNbspError(""); setNbspResult(null);
+    try {
+      const res = await fetch("/api/admin/clean-nbsp");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Scan failed");
+      setNbspResult(data);
+    } catch (e: any) {
+      setNbspError(e.message);
+    } finally {
+      setNbspScanning(false);
+    }
+  }
+
+  async function applyNbsp() {
+    setNbspApplying(true); setNbspError("");
+    try {
+      const res = await fetch("/api/admin/clean-nbsp", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Apply failed");
+      setNbspResult(data);
+    } catch (e: any) {
+      setNbspError(e.message);
+    } finally {
+      setNbspApplying(false);
+    }
+  }
+
   const isConnected = !!configured.hf_access_token?.set;
   const tokenAge    = configured.hf_access_token?.updated_at
     ? Math.round((Date.now() - new Date(configured.hf_access_token.updated_at).getTime()) / 3600000)
@@ -226,6 +260,64 @@ export default function AdminSettingsPage() {
           </div>
         </div>
       </form>
+
+      {/* ── Maintenance ── */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mt-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Settings size={16} className="text-gray-400" />
+          <h2 className="text-sm font-semibold text-white">Maintenance</h2>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">
+          Scan existing articles for stray &amp;nbsp; left in plain-text fields (Post Title, Read Time, Intro, SEO Title, SEO Description). Never touches Key Takeaways, Cover Image, or Post Content.
+        </p>
+
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            onClick={scanNbsp}
+            disabled={nbspScanning}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-700 text-white text-sm font-medium hover:bg-gray-600 disabled:opacity-50 transition-colors"
+          >
+            {nbspScanning && <Loader2 size={14} className="animate-spin" />}
+            Scan for &amp;nbsp;
+          </button>
+          {nbspResult?.mode === "dry_run" && nbspResult.would_update > 0 && (
+            <button
+              onClick={applyNbsp}
+              disabled={nbspApplying}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-kolet-yellow text-kolet-black text-sm font-medium hover:bg-kolet-yellow/90 disabled:opacity-50 transition-colors"
+            >
+              {nbspApplying && <Loader2 size={14} className="animate-spin" />}
+              Clean {nbspResult.would_update} article{nbspResult.would_update === 1 ? "" : "s"}
+            </button>
+          )}
+        </div>
+
+        {nbspError && (
+          <div className="flex items-center gap-1.5 text-xs text-red-400 mb-2">
+            <AlertCircle size={13} /> {nbspError}
+          </div>
+        )}
+
+        {nbspResult && (
+          <div className="text-xs text-gray-400 space-y-1.5">
+            <p className="flex items-center gap-1.5">
+              <CheckCircle size={12} className="text-green-400" />
+              {nbspResult.mode === "applied"
+                ? `Updated ${nbspResult.updated} of ${nbspResult.total_scanned} scanned.`
+                : `${nbspResult.would_update} of ${nbspResult.total_scanned} scanned would be updated.`}
+            </p>
+            {(nbspResult.changes || []).length > 0 && (
+              <div className="bg-gray-800/50 rounded-lg p-3 space-y-1 max-h-48 overflow-y-auto">
+                {nbspResult.changes.map((c: any) => (
+                  <p key={c.id} className="font-mono text-gray-500 text-xs">
+                    {c.id}: &quot;{c.title_before}&quot; → &quot;{c.title_after}&quot;
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

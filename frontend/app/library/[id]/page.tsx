@@ -2,7 +2,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Eye as EyeIcon } from "lucide-react";
+import { diffWords } from "@/lib/diff";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -342,6 +343,17 @@ export default function ArticleDetailPage() {
   const [showInlineForm, setShowInlineForm] = useState(false);
   const reviewRef = useRef<HTMLDivElement>(null);
   const inlineFormRef = useRef<HTMLDivElement>(null);
+  // AI rewrite-selection
+  const [showAiForm, setShowAiForm]     = useState(false);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiLoading, setAiLoading]       = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [aiError, setAiError]           = useState('');
+  const aiFormRef = useRef<HTMLDivElement>(null);
+  // Direct edit-in-place with before/after diff preview
+  const [editStage, setEditStage]     = useState<'idle' | 'editing' | 'diff'>('idle');
+  const [editOriginal, setEditOriginal] = useState('');
+  const [editDraft, setEditDraft]       = useState('');
   // Content save state
   const [isDirty, setIsDirty]           = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
@@ -429,24 +441,27 @@ export default function ArticleDetailPage() {
     function onGlobalMouseUp() {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.toString().trim()) {
-        if (!showInlineForm) setSelectionPos(null);
+        if (!showInlineForm && !showAiForm) setSelectionPos(null);
       }
     }
     document.addEventListener('mouseup', onGlobalMouseUp);
     return () => document.removeEventListener('mouseup', onGlobalMouseUp);
-  }, [reviewMode, showInlineForm]);
+  }, [reviewMode, showInlineForm, showAiForm]);
 
   // Dismiss the floating inline form when clicking outside it
   useEffect(() => {
-    if (!showInlineForm) return;
+    if (!showInlineForm && !showAiForm) return;
     function onMouseDown(e: MouseEvent) {
-      if (inlineFormRef.current && !inlineFormRef.current.contains(e.target as Node)) {
+      if (showInlineForm && inlineFormRef.current && !inlineFormRef.current.contains(e.target as Node)) {
         dismissInlineComment();
+      }
+      if (showAiForm && aiFormRef.current && !aiFormRef.current.contains(e.target as Node)) {
+        dismissAiForm();
       }
     }
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [showInlineForm]);
+  }, [showInlineForm, showAiForm]);
 
   async function submitComment(quote = '') {
     if (!commentBody.trim()) return;
@@ -489,12 +504,14 @@ export default function ArticleDetailPage() {
   }
 
   function handleReviewMouseUp() {
+    if (editStage !== 'idle') return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
     const range = sel.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     setSelectionPos({ x: rect.left + rect.width / 2, y: rect.top });
     setShowInlineForm(false);
+    setShowAiForm(false);
   }
 
   function openInlineForm() {
@@ -515,6 +532,100 @@ export default function ArticleDetailPage() {
     await submitComment(pendingQuote);
     dismissInlineComment();
   }
+
+  function openAiForm() {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? '';
+    setPendingQuote(text);
+    setAiInstruction('');
+    setAiSuggestion(null);
+    setAiError('');
+    setShowAiForm(true);
+  }
+
+  function dismissAiForm() {
+    setSelectionPos(null);
+    setShowAiForm(false);
+    setPendingQuote('');
+    setAiInstruction('');
+    setAiSuggestion(null);
+    setAiError('');
+  }
+
+  async function requestAiRewrite() {
+    if (!pendingQuote) return;
+    setAiLoading(true); setAiError(''); setAiSuggestion(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/edit-selection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selection: pendingQuote, instruction: aiInstruction }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Rewrite failed');
+      setAiSuggestion(data.replacement);
+    } catch (e: any) {
+      setAiError(e.message);
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function acceptAiRewrite() {
+    if (!aiSuggestion || !pendingQuote) return;
+    const updated = rawContent.replace(pendingQuote, aiSuggestion);
+    setRawContent(updated);
+    setContentKey(k => k + 1);
+    try {
+      await fetch(`${API_BASE}/api/articles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: updated }),
+      });
+    } catch {}
+    dismissAiForm();
+  }
+
+  function startEditingContent() {
+    dismissInlineComment();
+    dismissAiForm();
+    setEditOriginal(sections.content);
+    setEditDraft(sections.content);
+    setEditStage('editing');
+  }
+
+  function previewEditChanges() {
+    setEditStage('diff');
+  }
+
+  function keepEditing() {
+    setEditStage('editing');
+  }
+
+  function discardEdit() {
+    setEditStage('idle');
+    setEditOriginal('');
+    setEditDraft('');
+  }
+
+  async function acceptEdit() {
+    const updated = rawContent.replace(editOriginal, editDraft);
+    setRawContent(updated);
+    setContentKey(k => k + 1);
+    try {
+      await fetch(`${API_BASE}/api/articles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: updated }),
+      });
+    } catch {}
+    discardEdit();
+  }
+
+  const editDiff = useMemo(
+    () => (editStage === 'diff' ? diffWords(editOriginal, editDraft) : []),
+    [editStage, editOriginal, editDraft]
+  );
 
   // Auto-save urlMap to DB whenever it changes (skip the initial populate from DB)
   useEffect(() => {
@@ -918,9 +1029,19 @@ export default function ArticleDetailPage() {
             onMouseUp={handleReviewMouseUp}
             className="mb-6 bg-white border-2 border-orange-200 rounded-xl p-8 shadow-sm cursor-text select-text"
           >
-            <div className="flex items-center gap-2 mb-6 text-xs text-orange-600 font-semibold">
-              <MessageSquare size={13} />
-              Review mode — select any text and click Comment to flag a change
+            <div className="flex items-center justify-between gap-3 mb-6">
+              <div className="flex items-center gap-2 text-xs text-orange-600 font-semibold">
+                <MessageSquare size={13} />
+                Review mode — select text for Comment/Ask AI, or edit the body directly below
+              </div>
+              {editStage === 'idle' && (
+                <button
+                  onClick={startEditingContent}
+                  className="shrink-0 flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-900 border border-stone-300 hover:border-stone-400 rounded-lg px-2.5 py-1 transition-colors"
+                >
+                  <Pencil size={11} /> Edit directly
+                </button>
+              )}
             </div>
             {sections.title && (
               <h1 className="text-2xl font-bold text-gray-900 mb-5 leading-tight">{sections.title}</h1>
@@ -938,9 +1059,73 @@ export default function ArticleDetailPage() {
                 </pre>
               </div>
             )}
-            <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7">
-              <HighlightedText text={sections.content} comments={openQuoted} {...hoverHandlers} />
-            </div>
+
+            {editStage === 'idle' && (
+              <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7">
+                <HighlightedText text={sections.content} comments={openQuoted} {...hoverHandlers} />
+              </div>
+            )}
+
+            {editStage === 'editing' && (
+              <div className="space-y-3">
+                <textarea
+                  value={editDraft}
+                  onChange={e => setEditDraft(e.target.value)}
+                  rows={18}
+                  autoFocus
+                  className="w-full text-sm text-gray-800 leading-7 bg-amber-50/40 border-2 border-dashed border-amber-300 rounded-lg p-4 focus:outline-none focus:border-amber-400 transition-colors resize-y font-sans"
+                />
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={discardEdit}
+                    className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={previewEditChanges}
+                    disabled={editDraft === editOriginal}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-gray-900 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    <EyeIcon size={11} /> Preview changes
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {editStage === 'diff' && (
+              <div className="space-y-3">
+                <div className="text-sm text-gray-800 whitespace-pre-wrap leading-7 bg-stone-50 border border-stone-200 rounded-lg p-4">
+                  {editDiff.map((op, i) => {
+                    if (op.type === 'same') return <span key={i}>{op.value}</span>;
+                    if (op.type === 'removed') return <span key={i} className="bg-red-100 text-red-700 line-through">{op.value}</span>;
+                    return <span key={i} className="bg-green-100 text-green-800">{op.value}</span>;
+                  })}
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={keepEditing}
+                      className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                    >
+                      ← Keep editing
+                    </button>
+                    <button
+                      onClick={discardEdit}
+                      className="text-xs text-red-500 hover:text-red-700 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                    >
+                      Discard all changes
+                    </button>
+                  </div>
+                  <button
+                    onClick={acceptEdit}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                  >
+                    <Check size={11} /> Accept changes
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -975,17 +1160,119 @@ export default function ArticleDetailPage() {
         );
       })()}
 
-      {/* Floating selection comment button */}
-      {selectionPos && !showInlineForm && (
-        <button
-          onMouseDown={e => e.preventDefault()}
-          onClick={openInlineForm}
+      {/* Floating selection action buttons */}
+      {selectionPos && !showInlineForm && !showAiForm && (
+        <div
           style={{ position: 'fixed', left: selectionPos.x, top: selectionPos.y - 40, transform: 'translateX(-50%)', zIndex: 9999 }}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-700 text-white text-xs font-semibold rounded-full shadow-lg transition-colors"
+          className="flex items-center gap-1.5"
         >
-          <MessageSquare size={11} /> Comment
-        </button>
+          <button
+            onMouseDown={e => e.preventDefault()}
+            onClick={openInlineForm}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-700 text-white text-xs font-semibold rounded-full shadow-lg transition-colors whitespace-nowrap"
+          >
+            <MessageSquare size={11} /> Comment
+          </button>
+          <button
+            onMouseDown={e => e.preventDefault()}
+            onClick={openAiForm}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold rounded-full shadow-lg transition-colors whitespace-nowrap"
+          >
+            <Sparkles size={11} /> Ask AI
+          </button>
+        </div>
       )}
+
+      {/* Floating AI rewrite-selection form */}
+      {showAiForm && selectionPos && (() => {
+        const FORM_W = 320;
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+        const safeLeft = Math.max(FORM_W / 2 + 12, Math.min(selectionPos.x, vw - FORM_W / 2 - 12));
+        const safeTop  = Math.max(12, Math.min(selectionPos.y - 8, vh - 360));
+        return (
+          <div
+            ref={aiFormRef}
+            style={{ position: 'fixed', left: safeLeft, top: safeTop, transform: 'translateX(-50%)', zIndex: 9999 }}
+            className="w-80 bg-white border border-stone-300 rounded-xl shadow-2xl p-4 space-y-3"
+          >
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-violet-600">
+              <Sparkles size={12} /> Ask AI to rewrite
+            </div>
+            {pendingQuote && (
+              <div className="text-xs text-gray-600 bg-stone-50 border-l-2 border-stone-300 px-3 py-2 rounded-r-md leading-relaxed italic break-words max-h-24 overflow-y-auto">
+                &ldquo;{pendingQuote.length > 200 ? pendingQuote.slice(0, 197) + '…' : pendingQuote}&rdquo;
+              </div>
+            )}
+
+            {!aiSuggestion && (
+              <>
+                <textarea
+                  value={aiInstruction}
+                  onChange={e => setAiInstruction(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) requestAiRewrite(); }}
+                  placeholder="How should this change? (optional — leave blank to just polish it)"
+                  rows={2}
+                  autoFocus
+                  className="w-full text-xs bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 focus:outline-none focus:border-violet-400 transition-colors resize-none"
+                />
+                {aiError && <p className="text-xs text-red-500">{aiError}</p>}
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={dismissAiForm}
+                    className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={requestAiRewrite}
+                    disabled={aiLoading}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {aiLoading ? <Loader size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                    {aiLoading ? 'Rewriting…' : 'Rewrite'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {aiSuggestion && (
+              <>
+                <div className="text-xs text-gray-800 bg-emerald-50 border-l-2 border-emerald-400 px-3 py-2 rounded-r-md leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {aiSuggestion}
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => setAiSuggestion(null)}
+                    className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                  >
+                    Try again
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={dismissAiForm}
+                      className="text-xs text-gray-400 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={acceptAiRewrite}
+                      className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                    >
+                      <Check size={11} /> Accept
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Floating inline comment form */}
       {showInlineForm && selectionPos && (() => {

@@ -57,7 +57,6 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
 
   const eeatScore = ai?.eeat_score ?? null;
   const verdict   = ai?.verdict ?? (eeatScore !== null ? (eeatScore >= 75 ? 'PASS' : eeatScore >= 55 ? 'NEEDS_REVISION' : 'FAIL') : 'NEEDS_REVISION');
-  const newStatus = verdict === 'PASS' ? 'reviewed' : 'needs_revision';
 
   const report = {
     seo_score: seoScore,
@@ -72,7 +71,7 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
     fixes:  ai?.fixes  ?? [],
   };
 
-  await sql`UPDATE articles SET seo_score=${seoScore}, eeat_score=${eeatScore}, status=${newStatus}, audit_report=${JSON.stringify(report)} WHERE id=${id}`;
+  await sql`UPDATE articles SET seo_score=${seoScore}, eeat_score=${eeatScore}, audit_report=${JSON.stringify(report)} WHERE id=${id}`;
 
   return NextResponse.json({
     seo_score: seoScore,
