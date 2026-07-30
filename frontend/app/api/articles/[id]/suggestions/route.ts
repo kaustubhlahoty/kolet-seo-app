@@ -37,6 +37,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     VALUES (${suggestionId}, ${id}, ${source}, ${original_text}, ${proposed_text}, ${author})
   `;
 
+  // A proposed edit is real reviewer feedback, same as a comment — flip out of the
+  // "awaiting first look" state so the writer knows something needs their attention.
+  await sql`UPDATE articles SET status='needs_revision' WHERE id=${id} AND status='needs_proofreading'`.catch(() => {});
+
   const articleRows = await sql`SELECT title FROM articles WHERE id=${id}`;
   const title = (articleRows[0] as any)?.title ?? 'Untitled';
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');

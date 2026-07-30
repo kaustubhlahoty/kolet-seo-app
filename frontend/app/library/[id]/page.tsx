@@ -264,12 +264,14 @@ function SideBySideDiff({ original, proposed }: { original: string; proposed: st
 export default function ArticleDetailPage() {
   const router = useRouter();
   const { id } = useParams() as { id: string };
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const isAdmin = (session?.user as any)?.role === "admin";
 
   const [suggestions, setSuggestions]   = useState<Suggestion[]>([]);
   const [suggestionActioning, setSuggestionActioning] = useState<string | null>(null);
   const [suggestionError, setSuggestionError] = useState("");
+  const [reviewActioning, setReviewActioning] = useState(false);
+  const [reviewActionError, setReviewActionError] = useState('');
 
   const [rawContent, setRawContent]   = useState("");
   const [meta, setMeta]               = useState<any>(null);
@@ -313,6 +315,9 @@ export default function ArticleDetailPage() {
   const activeThreadRef = useRef<HTMLDivElement>(null);
   // Review mode (inline highlighting)
   const [reviewMode, setReviewMode]     = useState(false);
+  // Reviewers only ever see Review Mode — no CMS fields, no way to exit it.
+  // Wait for the session to actually resolve so this doesn't fire during the loading state.
+  useEffect(() => { if (sessionStatus === 'authenticated' && !isAdmin) setReviewMode(true); }, [sessionStatus, isAdmin]);
   const [selectionPos, setSelectionPos] = useState<{ x: number; y: number } | null>(null);
   const [pendingQuote, setPendingQuote] = useState('');
   const [showInlineForm, setShowInlineForm] = useState(false);
@@ -455,6 +460,28 @@ export default function ArticleDetailPage() {
     } finally {
       setSuggestionActioning(null);
     }
+  }
+
+  // ── Reviewer's finish-review action — label/behaviour depends on whether they flagged anything ──
+  async function approveForPublish() {
+    setReviewActioning(true);
+    setReviewActionError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/approve`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to approve');
+      router.push('/library');
+    } catch (e: any) {
+      setReviewActionError(e.message);
+    } finally {
+      setReviewActioning(false);
+    }
+  }
+
+  // Comments and suggestions are already persisted the moment they're created — there's
+  // nothing further to submit over the network. This just closes out the review session.
+  function submitChanges() {
+    router.push('/library');
   }
 
   // In review mode, clear the floating button when the user's selection collapses
@@ -1098,15 +1125,17 @@ export default function ArticleDetailPage() {
         </>}
 
         <button
-          onClick={() => { setReviewMode(v => !v); dismissInlineComment(); }}
+          onClick={isAdmin ? () => { setReviewMode(v => !v); dismissInlineComment(); } : undefined}
+          disabled={!isAdmin}
+          title={isAdmin ? undefined : 'Reviewers always work in Review Mode'}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
             reviewMode
               ? 'bg-orange-500/10 border-orange-400 text-orange-600'
               : 'border-stone-300 text-gray-500 hover:border-stone-400 hover:text-gray-700'
-          }`}
+          } ${!isAdmin ? 'cursor-default' : ''}`}
         >
           <MessageSquare size={11} />
-          {reviewMode ? 'Exit Review' : 'Review Mode'}
+          {isAdmin ? (reviewMode ? 'Exit Review' : 'Review Mode') : 'Review Mode'}
         </button>
         {comments.filter(c => !c.resolved && !c.parent_id).length > 0 && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500 text-white font-semibold">
@@ -1120,28 +1149,55 @@ export default function ArticleDetailPage() {
         )}
 
         <div className="ml-auto flex items-center gap-2.5">
-          {saveError && <span className="text-xs text-red-400">{saveError}</span>}
-          {isSaving && (
-            <span className="text-xs text-gray-400 flex items-center gap-1">
-              <Loader size={11} className="animate-spin" /> Saving…
-            </span>
-          )}
-          {!isSaving && lastSavedAt && !isDirty && (
-            <span className="text-xs text-gray-400 flex items-center gap-1">
-              <Check size={11} /> {isAdmin ? 'Saved' : 'Submitted'} {lastSavedAt}
-            </span>
-          )}
-          {isDirty && !isSaving && (
-            <span className="text-xs text-amber-500">Unsaved changes</span>
-          )}
-          <button
-            onClick={saveContent}
-            disabled={isSaving}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 disabled:opacity-40 text-kolet-black text-xs font-semibold rounded-lg transition-colors"
-          >
-            {isSaving ? <Loader size={11} className="animate-spin" /> : isAdmin ? <Check size={11} /> : <GitPullRequest size={11} />}
-            {isAdmin ? 'Save' : 'Submit for approval'}
-          </button>
+          {isAdmin ? (
+            <>
+              {saveError && <span className="text-xs text-red-400">{saveError}</span>}
+              {isSaving && (
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <Loader size={11} className="animate-spin" /> Saving…
+                </span>
+              )}
+              {!isSaving && lastSavedAt && !isDirty && (
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <Check size={11} /> Saved {lastSavedAt}
+                </span>
+              )}
+              {isDirty && !isSaving && (
+                <span className="text-xs text-amber-500">Unsaved changes</span>
+              )}
+              <button
+                onClick={saveContent}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-kolet-yellow hover:bg-kolet-yellow/85 disabled:opacity-40 text-kolet-black text-xs font-semibold rounded-lg transition-colors"
+              >
+                {isSaving ? <Loader size={11} className="animate-spin" /> : <Check size={11} />}
+                Save
+              </button>
+            </>
+          ) : (() => {
+            const openCount = comments.filter(c => !c.resolved && !c.parent_id).length;
+            const pendingCount = suggestions.filter(s => s.status === 'pending').length;
+            const hasOpenWork = openCount > 0 || pendingCount > 0;
+            const canAct = meta?.status === 'needs_proofreading' || meta?.status === 'needs_revision';
+            if (!canAct) {
+              return <span className="text-xs text-gray-400">No action needed right now</span>;
+            }
+            return (
+              <>
+                {reviewActionError && <span className="text-xs text-red-400">{reviewActionError}</span>}
+                <button
+                  onClick={hasOpenWork ? submitChanges : approveForPublish}
+                  disabled={reviewActioning}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 disabled:opacity-40 text-xs font-semibold rounded-lg transition-colors ${
+                    hasOpenWork ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                  }`}
+                >
+                  {reviewActioning ? <Loader size={11} className="animate-spin" /> : hasOpenWork ? <GitPullRequest size={11} /> : <Check size={11} />}
+                  {hasOpenWork ? 'Submit changes' : 'Approve for Publish'}
+                </button>
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -1156,6 +1212,7 @@ export default function ArticleDetailPage() {
       {reviewMode && (() => {
         const openQuoted = comments.filter(c => !c.resolved && !c.parent_id);
         const openThread = (c: Comment, rect: DOMRect) => { setActiveThread(c); setActiveThreadRect(rect); };
+        const pendingOriginals = suggestions.filter(s => s.status === 'pending').map(s => s.original_text);
         return (
           <div
             ref={reviewRef}
@@ -1171,16 +1228,16 @@ export default function ArticleDetailPage() {
             )}
             {sections.intro && (
               <div className="text-gray-600 text-base leading-relaxed mb-6 border-l-4 border-kolet-yellow pl-4">
-                <MarkdownPreview content={sections.intro} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} />
+                <MarkdownPreview content={sections.intro} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} pendingOriginals={pendingOriginals} />
               </div>
             )}
             {sections.keyTakeaways && (
               <div className="mb-6">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Key Takeaways</p>
-                <MarkdownPreview content={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} />
+                <MarkdownPreview content={sections.keyTakeaways} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} pendingOriginals={pendingOriginals} />
               </div>
             )}
-            <MarkdownPreview content={sections.content} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} />
+            <MarkdownPreview content={sections.content} comments={openQuoted} onOpen={openThread} editable onSubmitEdit={submitBlockEdit} pendingOriginals={pendingOriginals} />
           </div>
         );
       })()}
@@ -1522,6 +1579,8 @@ export default function ArticleDetailPage() {
         );
       })()}
 
+      {isAdmin && (
+      <>
       <div className="grid grid-cols-3 gap-6 items-start">
 
         {/* ── CMS fields ── */}
@@ -1757,6 +1816,8 @@ export default function ArticleDetailPage() {
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {/* ── Suggested Edits (merge-request style review) ── */}
       {(() => {

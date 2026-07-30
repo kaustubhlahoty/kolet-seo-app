@@ -277,11 +277,12 @@ function InlineRun({ tokens, comments, onOpen }: { tokens: InlineToken[]; commen
 
 /** Wraps a block with a hover-reveal pencil that turns it into an in-place editable textarea. */
 function EditableBlock({
-  raw, editable, onSubmitEdit, children,
+  raw, editable, onSubmitEdit, flagged, children,
 }: {
   raw: string;
   editable: boolean;
   onSubmitEdit?: OnSubmitEdit;
+  flagged?: boolean;
   children: React.ReactNode;
 }) {
   const [editing, setEditing]       = useState(false);
@@ -331,7 +332,12 @@ function EditableBlock({
   }
 
   return (
-    <div className="group relative -mx-2 px-2 rounded-lg hover:bg-stone-50 transition-colors">
+    <div
+      title={flagged ? "This block has a pending suggested edit — see Suggested Edits below" : undefined}
+      className={`group relative -mx-2 px-2 rounded-lg hover:bg-stone-50 transition-colors ${
+        flagged ? 'border-l-4 border-sky-300 bg-sky-50/40' : ''
+      }`}
+    >
       {children}
       <button
         onClick={() => { setDraft(raw); setEditing(true); }}
@@ -347,15 +353,18 @@ function EditableBlock({
 // ── Public component ─────────────────────────────────────────────────────────
 
 export function MarkdownPreview({
-  content, comments, onOpen, editable = false, onSubmitEdit,
+  content, comments, onOpen, editable = false, onSubmitEdit, pendingOriginals,
 }: {
   content: string;
   comments: Comment[];
   onOpen: OnOpen;
   editable?: boolean;
   onSubmitEdit?: OnSubmitEdit;
+  /** original_text of any pending suggestions — blocks containing one get visually flagged. */
+  pendingOriginals?: string[];
 }) {
   const blocks = useMemo(() => parseBlocks(content), [content]);
+  const isFlagged = (raw: string) => !!pendingOriginals?.some(o => raw.includes(o));
 
   return (
     <div className="space-y-4">
@@ -369,11 +378,11 @@ export function MarkdownPreview({
           ) : (
             <h3 className={cls}><InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} /></h3>
           );
-          return <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit}>{inner}</EditableBlock>;
+          return <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit} flagged={isFlagged(b.raw)}>{inner}</EditableBlock>;
         }
         if (b.type === "paragraph") {
           return (
-            <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit}>
+            <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit} flagged={isFlagged(b.raw)}>
               <p className="text-sm text-gray-800 leading-7">
                 <InlineRun tokens={tokenizeInline(b.text)} comments={comments} onOpen={onOpen} />
               </p>
@@ -382,7 +391,7 @@ export function MarkdownPreview({
         }
         if (b.type === "list") {
           return (
-            <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit}>
+            <EditableBlock key={i} raw={b.raw} editable={editable} onSubmitEdit={onSubmitEdit} flagged={isFlagged(b.raw)}>
               <ul className="list-disc pl-5 space-y-1 text-sm text-gray-800 leading-7">
                 {b.items.map((item, j) => (
                   <li key={j}><InlineRun tokens={tokenizeInline(item)} comments={comments} onOpen={onOpen} /></li>
