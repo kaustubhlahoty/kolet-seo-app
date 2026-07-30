@@ -343,6 +343,10 @@ export default function ArticleDetailPage() {
   // Refs for closure-safe access inside autosave callback
   const rawContentRef  = useRef('');
   const liveContentRef = useRef('');
+  const liveTitleRef = useRef('');
+  const liveReadTimeRef = useRef('');
+  const liveIntroRef = useRef('');
+  const liveKeyTakeawaysRef = useRef('');
   const serpTitleRef   = useRef('');
   const serpDescRef    = useRef('');
   const urlMapRef      = useRef<Record<string, string>>({});
@@ -795,14 +799,22 @@ export default function ArticleDetailPage() {
         updatedRaw = replaceContentBody(updatedRaw, liveBody);
       }
 
-      const title = serpTitleRef.current;
-      const desc  = serpDescRef.current;
-      if (title?.trim()) updatedRaw = replaceSeoLine(updatedRaw, 'SEO TITLE', title);
-      if (desc?.trim())  updatedRaw = replaceSeoLine(updatedRaw, 'SEO DESCRIPTION', desc);
-
-      if (updatedRaw === before) { setIsDirty(false); return; }
+      const title       = serpTitleRef.current;
+      const desc        = serpDescRef.current;
+      const postTitle    = liveTitleRef.current;
+      const readTime     = liveReadTimeRef.current;
+      const intro        = liveIntroRef.current;
+      const keyTakeaways = liveKeyTakeawaysRef.current;
+      if (title?.trim())          updatedRaw = replaceSeoLine(updatedRaw, 'SEO TITLE', title);
+      if (desc?.trim())           updatedRaw = replaceSeoLine(updatedRaw, 'SEO DESCRIPTION', desc);
+      if (postTitle?.trim())      updatedRaw = replaceSeoLine(updatedRaw, 'POST TITLE', postTitle);
+      if (readTime?.trim())       updatedRaw = replaceSeoLine(updatedRaw, 'READ TIME', readTime);
+      if (intro?.trim())          updatedRaw = replaceBlockField(updatedRaw, /INTRO\s*[\(（]/, /KEY TAKEAWAYS|COVER IMAGE|═{5}/, intro);
+      if (keyTakeaways?.trim())   updatedRaw = replaceBlockField(updatedRaw, /KEY TAKEAWAYS/, /COVER IMAGE|═{5}/, keyTakeaways);
 
       if (isAdmin) {
+        // Always confirm for admins, even if nothing textually changed — a click on Save
+        // should never appear to do nothing.
         await fetch(`${API_BASE}/api/articles/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -811,6 +823,11 @@ export default function ArticleDetailPage() {
         rawContentRef.current = updatedRaw;
         setRawContent(updatedRaw);
       } else {
+        if (updatedRaw === before) {
+          setIsDirty(false);
+          setSaveError('Nothing to submit — no changes detected.');
+          return;
+        }
         const result = await proposeChange(before, updatedRaw, 'direct_edit');
         if (!result.ok) { setSaveError(result.error); return; }
         // Pending admin approval — stored content is untouched until merged.
@@ -984,6 +1001,18 @@ export default function ArticleDetailPage() {
       new RegExp(`(${field}[^\\n]*:\\n)([^\\n═]+)`),
       `$1${newValue}`
     );
+  }
+
+  // Same start/end boundary logic as parseArticle's block() extractor, so a multi-line
+  // field (Intro, Key Takeaways) gets spliced back into the exact span it was read from.
+  function replaceBlockField(content: string, startRe: RegExp, endRe: RegExp, newValue: string): string {
+    const si = content.search(startRe);
+    if (si === -1) return content;
+    const labelLineEnd = content.indexOf('\n', si) + 1;
+    const rest = content.slice(labelLineEnd);
+    const ei = rest.search(endRe);
+    const blockEnd = ei === -1 ? content.length : labelLineEnd + ei;
+    return content.slice(0, labelLineEnd) + newValue.trim() + '\n\n' + content.slice(blockEnd);
   }
 
   async function applyCtrVariants() {
@@ -1498,12 +1527,16 @@ export default function ArticleDetailPage() {
         {/* ── CMS fields ── */}
         <div className="col-span-2 space-y-4">
 
-          <Field label="Title"          initialValue={sections.title}          copiedKey="title"    activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
+          <Field label="Title"          initialValue={sections.title}          copiedKey="title"    activeCopied={activeCopied} onCopy={handleCopy} type="plain"
+            onChange={v => { liveTitleRef.current = v; if (v !== sections.title) setIsDirty(true); }} />
           <Field label="Publish Date"   initialValue={today}                   copiedKey="date"     activeCopied={activeCopied} onCopy={handleCopy} type="date" />
           <Field label="Language"       initialValue={LANG_LABELS[meta?.lang] ?? meta?.lang ?? ""} copiedKey="lang" activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
-          <Field label="Read Time"      initialValue={sections.readTime}       copiedKey="readTime" activeCopied={activeCopied} onCopy={handleCopy} type="plain" />
-          <Field label="Intro"          initialValue={sections.intro}          copiedKey="intro"    activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={4} />
-          <Field label="Key Takeaways"  initialValue={sections.keyTakeaways}   copiedKey="kt"       activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={5} />
+          <Field label="Read Time"      initialValue={sections.readTime}       copiedKey="readTime" activeCopied={activeCopied} onCopy={handleCopy} type="plain"
+            onChange={v => { liveReadTimeRef.current = v; if (v !== sections.readTime) setIsDirty(true); }} />
+          <Field label="Intro"          initialValue={sections.intro}          copiedKey="intro"    activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={4}
+            onChange={v => { liveIntroRef.current = v; if (v !== sections.intro) setIsDirty(true); }} />
+          <Field label="Key Takeaways"  initialValue={sections.keyTakeaways}   copiedKey="kt"       activeCopied={activeCopied} onCopy={handleCopy} type="multiline" rows={5}
+            onChange={v => { liveKeyTakeawaysRef.current = v; if (v !== sections.keyTakeaways) setIsDirty(true); }} />
 
           <ContentField
             key={contentKey}

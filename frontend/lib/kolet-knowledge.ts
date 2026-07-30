@@ -106,7 +106,7 @@ export const KOLET_KNOWLEDGE = {
         pricing: "Varies by destination — fetched live from the Kolet catalogue. Do not invent per-day prices.",
         network: "4G / 5G where available",
         activation: "Same as Standard Plans — validity starts when the first MB of data is used at destination",
-        flying_blue_miles: "Unlimited plans earn Flying Blue miles at the same rate as Standard Plans: 10 miles per euro spent. Miles are earned on every euro spent on any Kolet plan — Standard or Unlimited — for users who have their Flying Blue account linked in the app.",
+        flying_blue_miles: "Unlimited plans earn Flying Blue Miles at the same rate as Standard Plans: 10 Miles per euro spent. Miles are earned on every euro spent on any Kolet plan — Standard or Unlimited — for users who have their Flying Blue account linked in the app.",
         koins_payment: "Koins can be used to purchase unlimited plans.",
         top_ups: "Mid-trip top-ups are not available on unlimited plans. If a user hits the 5 GB full-speed cap, they continue at 1 Mbps until the 24-hour window resets — then full-speed resumes automatically.",
         speed_cap_reset: "The 5 GB full-speed allowance resets on a rolling 24-hour basis from first use — not per calendar day.",
@@ -129,7 +129,7 @@ export const KOLET_KNOWLEDGE = {
       },
       data_donation: "Roadmap feature allowing users to gift unused GBs to travellers who lack internet access — aligned with 'internet access for all' mission",
     },
-    payment_methods: ["Credit/debit card (Stripe)", "Koins (pre-loaded wallet)", "Flying Blue Miles (via PointsPay)", "Etihad miles (via PointsPay)"],
+    payment_methods: ["Credit/debit card (Stripe)", "Koins (pre-loaded wallet)", "Flying Blue Miles (via PointsPay)", "Etihad Miles (via PointsPay)"],
   },
 
   // ─── How it works (step by step) ──────────────────────────────────────────
@@ -156,7 +156,7 @@ export const KOLET_KNOWLEDGE = {
     unlimited_transparency: "Kolet's Unlimited Plans are honest about the daily speed cap: full speed up to 5 GB per 24-hour window, then 1 Mbps until the window resets — data access never cuts out. Kolet proactively communicates this; most competitors (including Holafly) apply similar throttling but do not clearly disclose it. Content angle: 'What does unlimited eSIM actually mean — and why Kolet tells you upfront.'",
     no_throttling_standard: "On Standard Plans: no throttling, no fair-use cap. The gigabytes you buy are used at full speed until the plan is empty.",
     airline_native: "Only travel eSIM provider embedded directly into the booking and pre-departure journeys of Air France, KLM, Transavia, Philippine Airlines, Virgin Atlantic, Singapore Airlines, Vietnam Airlines. Appears at the exact moment a traveller confirms a flight — not in an app store.",
-    flying_blue_miles: "Earn 10 Flying Blue Miles per euro spent on Kolet. Pay for plans with Flying Blue Miles. No other eSIM provider offers a miles-earning programme of this depth.",
+    flying_blue_miles: "Earn 10 Flying Blue Miles per euro spent on Kolet. Pay for plans with Flying Blue Miles. No other eSIM provider offers a Miles-earning programme of this depth.",
     one_esim_everywhere: "A single Kolet eSIM works across all 190+ covered destinations. No new eSIM needed per country — only the plan changes.",
     transparent_pricing: "No contracts, no subscriptions, no roaming fees. Price shown before purchase and confirmed before every call.",
     b_corp_unique: "Only certified B Corp among major travel eSIM providers (Holafly, Airalo, Saily are not certified). Score: 99.7/200 vs industry median 50.9.",
@@ -186,7 +186,7 @@ export const KOLET_KNOWLEDGE = {
     airlines: [
       { name: "Air France", detail: "Co-branded Kolet shop; pre-departure emails; MMB (Manage My Booking) integration — deep, embedded in booking flow" },
       { name: "KLM", detail: "Co-branded shop; AlwaysOn CRM campaigns (NL, GB, DE, CA, DK); pre-departure email — proactive CRM push" },
-      { name: "Flying Blue", detail: "Air France–KLM loyalty programme — miles payment and earning on all purchases (revenue-level integration)" },
+      { name: "Flying Blue", detail: "Air France–KLM loyalty programme — Miles payment and earning on all purchases (revenue-level integration)" },
       { name: "Transavia France", detail: "1 GB free for first 2 days, launched May 2026; ~400 routes from France, Netherlands, Belgium — embedded in post-booking journey" },
       { name: "Philippine Airlines", detail: "myPAL eSIM — 1 GB free for 2 days for all PAL passengers; co-branded website and app" },
       { name: "Virgin Atlantic", detail: "1 GB free for 48h; integrated across website, app, booking confirmation, and pre-departure comms" },
@@ -215,8 +215,8 @@ export const KOLET_KNOWLEDGE = {
   // ─── Loyalty & rewards ────────────────────────────────────────────────────
   loyalty: {
     flying_blue: {
-      earn_rate: "10 Flying Blue Miles per euro spent on all Kolet data plans. Say 'all Kolet data plans' — do not enumerate 'fixed or unlimited' every time. Miles are earned for users who have their Flying Blue account linked in the Kolet app BEFORE making the purchase. The account must be linked prior to purchase — purchases made before linking do not retroactively earn miles.",
-      how_to_link: "To link a Flying Blue number: open the Kolet app → Profile → Promo Codes and Rewards → Loyalty Program and Miles → select Flying Blue → enter your Flying Blue number. Must be done before purchasing to earn miles on that purchase. Help centre: https://help.kolet.com/en/articles/10137217-flying-blue-earn-miles-and-pay-with-miles",
+      earn_rate: "10 Flying Blue Miles per euro spent on all Kolet data plans. Say 'all Kolet data plans' — do not enumerate 'fixed or unlimited' every time. Miles are earned for users who have their Flying Blue account linked in the Kolet app BEFORE making the purchase. The account must be linked prior to purchase — purchases made before linking do not retroactively earn Miles.",
+      how_to_link: "To link a Flying Blue number: open the Kolet app → Profile → Promo Codes and Rewards → Loyalty Program and Miles → select Flying Blue → enter your Flying Blue number. Must be done before purchasing to earn Miles on that purchase. Help centre: https://help.kolet.com/en/articles/10137217-flying-blue-earn-miles-and-pay-with-miles",
       redeem: "Pay for Kolet data plans using Flying Blue Miles",
       referral: "Referrer earns 250 Flying Blue Miles; referee receives a free Kolet data plan",
       programme_size: "One of the world's largest airline loyalty programmes — tens of millions of members across 140+ countries",
@@ -232,8 +232,8 @@ export const KOLET_KNOWLEDGE = {
   competitors: {
     holafly: {
       their_claim: "Unlimited data, no top-ups needed",
-      kolet_counter: "Both Kolet and Holafly now offer unlimited plans — but Kolet is transparent: we explicitly tell users they get full speed up to 5 GB/day, then 1 Mbps. Holafly applies similar throttling thresholds but does not clearly disclose them upfront. Kolet also offers Standard Plans (190+ countries) for travellers who prefer predictable data volumes. And only Kolet earns you Flying Blue miles.",
-      content_angle: "Kolet vs Holafly — strongest angles: (1) transparent speed cap disclosure vs opaque fair-use policy, (2) Standard + unlimited choice vs unlimited-only, (3) Flying Blue miles integration",
+      kolet_counter: "Both Kolet and Holafly now offer unlimited plans — but Kolet is transparent: we explicitly tell users they get full speed up to 5 GB/day, then 1 Mbps. Holafly applies similar throttling thresholds but does not clearly disclose them upfront. Kolet also offers Standard Plans (190+ countries) for travellers who prefer predictable data volumes. And only Kolet earns you Flying Blue Miles.",
+      content_angle: "Kolet vs Holafly — strongest angles: (1) transparent speed cap disclosure vs opaque fair-use policy, (2) Standard + unlimited choice vs unlimited-only, (3) Flying Blue Miles integration",
     },
     airalo: {
       their_claim: "Huge catalogue, lowest prices on some routes, marketplace breadth",
@@ -242,7 +242,7 @@ export const KOLET_KNOWLEDGE = {
     },
     saily: {
       their_claim: "Simple UX, credibility from Nord Security (NordVPN) brand",
-      kolet_counter: "Kolet has deeper travel ecosystem, Flying Blue miles integration, B2B2C airline moat",
+      kolet_counter: "Kolet has deeper travel ecosystem, Flying Blue Miles integration, B2B2C airline moat",
       content_angle: "Kolet vs Saily — strongest angle: travel ecosystem depth",
     },
     broader: ["Nomad", "UPeSIM", "Pocket eSIM", "Truely", "Roamless", "GigSky", "Ubigi", "Sim Local"],
@@ -250,7 +250,7 @@ export const KOLET_KNOWLEDGE = {
 
   // ─── Target audience ──────────────────────────────────────────────────────
   personas: {
-    flying_blue_member: "Air France/KLM passenger, 4–12 trips/year, optimises loyalty. Chooses Kolet for miles earning and miles payment. High LTV.",
+    flying_blue_member: "Air France/KLM passenger, 4–12 trips/year, optimises loyalty. Chooses Kolet for Miles earning and Miles payment. High LTV.",
     leisure_traveller: "1–3 international trips/year. Pain: roaming bill shock, eSIM confusion. Needs how-to content, device compatibility reassurance, step-by-step guides.",
     digital_nomad: "Works from multiple countries. Values: reliability, data quantity, transparent pricing, no throttling. Wants destination-specific coverage data.",
     business_traveller: "Frequent flyer, corporate expense claims. Values: transparency, simplicity. Enters via employer B2E programme or Flying Blue.",
@@ -295,7 +295,7 @@ export const KOLET_KNOWLEDGE = {
         "We tell you exactly what unlimited means. Not every provider does.",
       ],
       partner: [
-        "The eSIM that earns you Air France–KLM miles.",
+        "The eSIM that earns you Air France–KLM Miles.",
         "Now included in your Air France booking: free data on arrival.",
         "Virgin Atlantic passengers: stay connected from the moment you land.",
       ],
@@ -327,8 +327,10 @@ export const KOLET_KNOWLEDGE = {
       "Use the B Corp angle for content targeting conscious travellers or corporate buyers.",
       "For partner-specific content: mention the specific gift plan (1 GB free) where relevant.",
       "When writing about unlimited plans: lead with the simplicity angle — 'buy days, not GBs', no data math needed.",
+      "Always capitalise 'Miles' (Flying Blue Miles, Etihad Miles, pay with Miles, earn Miles) — treat it as a proper-noun currency name, exactly like 'Koins'.",
     ],
     never: [
+      "Write lowercase 'miles' for the loyalty currency — it is always 'Miles', capitalised, whether standalone or in 'Flying Blue Miles' / 'Etihad Miles'.",
       "Say Kolet has no unlimited plans — Kolet offers both Standard Plans (fixed GB) and Unlimited Plans (day-based).",
       "Use 'unlimited' to describe Standard/GB-based plans — only 'Unlimited Plans' are the day-based plans.",
       "Call Standard Plans 'fixed plans', 'data plans', or 'GB plans' interchangeably — but never 'unlimited'.",
@@ -354,8 +356,8 @@ export const KOLET_KNOWLEDGE = {
     "Named tier-1 carrier partners per key market",
     "Activation success rate",
     "Top 10 destinations by purchase volume",
-    "Flying Blue miles earning rate (confirm 10 miles/€ is still current)",
-    "Etihad miles programme details",
+    "Flying Blue Miles earning rate (confirm 10 Miles/€ is still current)",
+    "Etihad Miles programme details",
   ],
 
 } as const;
@@ -374,14 +376,14 @@ FOUNDERS: Eduardo Ronzano (CEO, ex-KelDoc), Anne-Carole Cöen (CMO, ex-Swile/Fri
 MISSION: "Internet access for all." Eliminate roaming fees and SIM card complexity for travellers.
 
 PLANS — TWO TYPES:
-1. STANDARD PLANS: Regular data plans with a fixed number of gigabytes. Choose your GB allowance (1 GB, 3 GB, 5 GB, 10 GB, 20 GB). 30-day validity from first use. 190+ countries. From €3.99/1 GB in Europe. No throttling, no fair-use cap — full speed until the very last MB. Unused data converts to Koins at expiry. Earns Flying Blue miles (10 miles per euro spent) for users with a linked Flying Blue account.
+1. STANDARD PLANS: Regular data plans with a fixed number of gigabytes. Choose your GB allowance (1 GB, 3 GB, 5 GB, 10 GB, 20 GB). 30-day validity from first use. 190+ countries. From €3.99/1 GB in Europe. No throttling, no fair-use cap — full speed until the very last MB. Unused data converts to Koins at expiry. Earns Flying Blue Miles (10 Miles per euro spent) for users with a linked Flying Blue account.
 2. UNLIMITED PLANS: Unlimited data on a daily basis with a daily speed cap. Buy by the day — no need to calculate GBs. Choose the number of travel days and stay connected throughout. 100+ countries. Full speed up to 5 GB per 24-hour window, then reduced to 1 Mbps until the 24h window resets — data access never cuts out (1 Mbps supports messaging, maps, and email). Full-speed allowance refreshes automatically on a rolling 24-hour basis. No mid-trip top-ups on Unlimited Plans. Can be paid with Koins. Cannot convert unused days to Koins. Cannot share data from Unlimited Plans. Exact per-day pricing varies by destination — fetch from live catalogue.
 
 FLYING BLUE MILES: Every euro spent on all Kolet data plans earns 10 Flying Blue Miles — but ONLY if the user has linked their Flying Blue account in the app BEFORE making the purchase. Miles are not earned retroactively on purchases made before linking. Say "all Kolet data plans" — do not list "fixed or unlimited" every time. To link: Kolet app → Profile → Promo Codes and Rewards → Loyalty Program and Miles → Flying Blue → enter Flying Blue number. Help centre: https://help.kolet.com/en/articles/10137217-flying-blue-earn-miles-and-pay-with-miles
 
 TRANSPARENCY ON UNLIMITED: Kolet explicitly discloses the 5 GB/day full-speed threshold and the 1 Mbps reduced-speed policy. Most competitors (including Holafly) apply similar caps but do not clearly communicate them. This transparency is a Kolet differentiator — always mention it in unlimited-plan content.
 
-PAYMENT: Card, Koins wallet, Flying Blue Miles, or Etihad miles. Top-ups available mid-trip without reinstalling (Standard Plans). International calls: March 2026, internet-based, per-minute, paid in Koins.
+PAYMENT: Card, Koins wallet, Flying Blue Miles, or Etihad Miles. Top-ups available mid-trip without reinstalling (Standard Plans). International calls: March 2026, internet-based, per-minute, paid in Koins.
 
 KOINS WALLET: 1 EUR = 100 Koins. Unused Standard Plan data converts to Koins at expiry — no waste. Earn via referrals and partner gifts.
 
@@ -393,21 +395,21 @@ KEY DIFFERENTIATORS:
 - Two plan types: Standard Plans (190+ countries, full speed until empty) + Unlimited Plans (100+ countries, by-day billing, transparent speed cap)
 - Transparent unlimited: 5 GB/day full speed then 1 Mbps — stated openly, not buried in fine print
 - Airline-native: Air France, KLM, Transavia, Philippine Airlines, Virgin Atlantic, Singapore Airlines, Vietnam Airlines — passengers get 1 GB free on several airlines
-- Flying Blue: earn 10 miles per €1 spent on all Kolet data plans — for users with a linked Flying Blue account (must link before purchase); pay with miles; refer = 250 miles for referrer + free plan for referee
+- Flying Blue: earn 10 Miles per €1 spent on all Kolet data plans — for users with a linked Flying Blue account (must link before purchase); pay with Miles; refer = 250 Miles for referrer + free plan for referee
 - One eSIM for 190+ countries — no new eSIM per destination, only the plan changes
 - B Corp certified (unique in category — Holafly, Airalo, Saily are not certified)
 - Unused Standard Plan data → Koins (not wasted)
 - No plastic SIM card production
 
-vs HOLAFLY: Both have unlimited plans — but Kolet tells you exactly what unlimited means (5 GB/day full speed, then 1 Mbps). Holafly applies similar throttling but doesn't clearly disclose it. Kolet also offers Standard Plans for travellers who prefer predictable data. Only Kolet earns Flying Blue miles.
+vs HOLAFLY: Both have unlimited plans — but Kolet tells you exactly what unlimited means (5 GB/day full speed, then 1 Mbps). Holafly applies similar throttling but doesn't clearly disclose it. Kolet also offers Standard Plans for travellers who prefer predictable data. Only Kolet earns Flying Blue Miles.
 vs AIRALO: Kolet is airline-integrated and loyalty-linked. Airalo is a transactional marketplace.
-vs SAILY: Kolet has deeper travel ecosystem and Flying Blue miles. Saily is backed by Nord Security.
+vs SAILY: Kolet has deeper travel ecosystem and Flying Blue Miles. Saily is backed by Nord Security.
 
 MARKET FACTS (citable): 51% of eSIM users first used eSIM for travel (GSMA). 70%+ of travellers still use airplane mode abroad. $1.75B global travel eSIM market in 2026.
 
 CONTENT RULES:
-ALWAYS: Be specific. Include at least one Kolet differentiator. When writing about unlimited plans, disclose the 5 GB/day cap and 1 Mbps policy — it's a strength, not a weakness. Mention Flying Blue when loyalty is relevant. Use B Corp for eco-conscious angles.
-NEVER: Say Kolet has no unlimited plans. Call Standard Plans "unlimited". Claim unlimited means truly unthrottled without disclosing the speed cap. Say users can convert or share unlimited plan data. Invent statistics. Use AI-pattern openers. Summarise in the conclusion — add value or end earlier. Imply Flying Blue miles are only earned on one plan type — miles apply to all Kolet data plans. Always say "all Kolet data plans", not "fixed or unlimited" or "fixed plans and unlimited plans alike". Imply miles are earned automatically regardless of account setup — the Flying Blue account must be linked in the app BEFORE purchase; no retroactive crediting. Invent app features, in-app flows, partnership details, or pricing that are not explicitly stated in this knowledge base — if unsure, omit and write around it rather than fabricating.`;
+ALWAYS: Be specific. Include at least one Kolet differentiator. When writing about unlimited plans, disclose the 5 GB/day cap and 1 Mbps policy — it's a strength, not a weakness. Mention Flying Blue when loyalty is relevant. Use B Corp for eco-conscious angles. Capitalise "Miles" every time (Flying Blue Miles, Etihad Miles, earn Miles, pay with Miles) — it's a proper-noun currency name, exactly like "Koins".
+NEVER: Say Kolet has no unlimited plans. Call Standard Plans "unlimited". Claim unlimited means truly unthrottled without disclosing the speed cap. Say users can convert or share unlimited plan data. Invent statistics. Use AI-pattern openers. Summarise in the conclusion — add value or end earlier. Imply Flying Blue Miles are only earned on one plan type — Miles apply to all Kolet data plans. Always say "all Kolet data plans", not "fixed or unlimited" or "fixed plans and unlimited plans alike". Imply Miles are earned automatically regardless of account setup — the Flying Blue account must be linked in the app BEFORE purchase; no retroactive crediting. Write lowercase "miles" anywhere — it is always "Miles". Invent app features, in-app flows, partnership details, or pricing that are not explicitly stated in this knowledge base — if unsure, omit and write around it rather than fabricating.`;
 }
 
 /**

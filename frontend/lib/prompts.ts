@@ -259,7 +259,7 @@ Score the article on each dimension below, then compute eeat_score as the weight
 DIMENSIONS (be strict — a score of 80+ must be genuinely earned, not the default):
 1. brand_voice (weight 30%): Warm, direct, slightly irreverent like a well-travelled friend. Deduct for: "leverage", "solutions", "Moreover", "Furthermore", "In conclusion", "It's important to note", fictional personas ("Imagine Sarah"), generic filler sentences that could appear in any brand's article.
 2. depth (weight 30%): Real traveller expertise — specific scenarios, concrete practical details, actionable advice. Deduct for: vague generalities, filler content that adds length without value, sections that could describe any eSIM brand.
-3. accuracy (weight 25%): Kolet facts must be correct: 190+ countries, Flying Blue 10 miles per €, pay-with-miles, B Corp certified, founded Jan 2024. Deduct for: invented prices, wrong stats, unsupported comparisons to Airalo/Holafly/Saily.
+3. accuracy (weight 25%): Kolet facts must be correct: 190+ countries, Flying Blue 10 Miles per €, pay-with-Miles, B Corp certified, founded Jan 2024. "Miles" must always be capitalised (Flying Blue Miles, Etihad Miles) — deduct for lowercase "miles". Deduct for: invented prices, wrong stats, unsupported comparisons to Airalo/Holafly/Saily.
 4. structure (weight 15%): Clean H2 flow, varied sentence length (short after long), no self-commentary ("let's now look at", "moving on to"), no overused rhythmic triplets.
 
 SCORING GUIDE: 90+ = publishable as-is · 75-89 = minor fixes · 55-74 = needs revision · <55 = significant rewrite
