@@ -7,7 +7,7 @@ import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Downl
 import { diffWords } from "@/lib/diff";
 import { placeholdersPreserved } from "@/lib/image-placeholders";
 import type { Comment } from "@/lib/types";
-import { MarkdownPreview } from "@/lib/markdown-preview";
+import { MarkdownPreview, findRawSpan } from "@/lib/markdown-preview";
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -629,15 +629,22 @@ export default function ArticleDetailPage() {
     proposed: string,
     source: 'direct_edit' | 'ai_rewrite' = 'direct_edit'
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    if (!original || !proposed.trim() || original === proposed) {
+    // `original` was captured from the rendered preview (decoded entities, stripped
+    // markdown markers) — resolve it back to the exact raw substring before touching content.
+    const rawOriginal = findRawSpan(rawContentRef.current, original) ?? original;
+
+    if (!rawOriginal || !proposed.trim() || rawOriginal === proposed) {
       return { ok: false, error: 'No change to apply' };
     }
-    const placeholderCheck = placeholdersPreserved(original, proposed);
+    if (!rawContentRef.current.includes(rawOriginal)) {
+      return { ok: false, error: 'Could not locate that text in the article — it may have changed. Try selecting again.' };
+    }
+    const placeholderCheck = placeholdersPreserved(rawOriginal, proposed);
     if (!placeholderCheck.ok) {
       return { ok: false, error: `This would remove an image reference (${placeholderCheck.missing.join(', ')}).` };
     }
     if (isAdmin) {
-      const updated = rawContentRef.current.replace(original, proposed);
+      const updated = rawContentRef.current.replace(rawOriginal, proposed);
       rawContentRef.current = updated;
       setRawContent(updated);
       setContentKey(k => k + 1);
@@ -654,7 +661,7 @@ export default function ArticleDetailPage() {
       const res = await fetch(`${API_BASE}/api/articles/${id}/suggestions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ original_text: original, proposed_text: proposed, source }),
+        body: JSON.stringify({ original_text: rawOriginal, proposed_text: proposed, source }),
       });
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error || 'Failed to submit' };

@@ -40,6 +40,67 @@ function tokenizeInline(raw: string): InlineToken[] {
   return tokens;
 }
 
+// ── Rendered-text -> raw-source mapping ─────────────────────────────────────
+// A selection made in the reading pane comes from decoded/marker-stripped text
+// (this is what tokenizeInline produces). To edit the real article we need the
+// exact raw substring — this walks raw with the same rules tokenizeInline uses
+// and records, for every decoded character, which raw span produced it.
+
+function decodeEntityAt(raw: string, i: number): { ch: string; len: number } | null {
+  const m = raw.slice(i, i + 8).match(/^&(nbsp|amp|quot|#39|apos|lt|gt);/);
+  if (!m) return null;
+  const map: Record<string, string> = { nbsp: " ", amp: "&", quot: '"', "#39": "'", apos: "'", lt: "<", gt: ">" };
+  return { ch: map[m[1]], len: m[0].length };
+}
+
+function buildRenderedMap(raw: string): { decoded: string; starts: number[]; ends: number[] } {
+  const decoded: string[] = [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let i = 0;
+  const n = raw.length;
+
+  const emitRun = (from: number, to: number) => {
+    let j = from;
+    while (j < to) {
+      const ent = decodeEntityAt(raw, j);
+      if (ent) { decoded.push(ent.ch); starts.push(j); ends.push(j + ent.len); j += ent.len; }
+      else { decoded.push(raw[j]); starts.push(j); ends.push(j + 1); j++; }
+    }
+  };
+
+  while (i < n) {
+    const rest = raw.slice(i, i + 500); // markdown spans here are short; cap for perf
+    const link = rest.match(/^\[([^\]]+)\]\(([^)]+)\)/);
+    if (link) { emitRun(i + 1, i + 1 + link[1].length); i += link[0].length; continue; }
+    const bold = rest.match(/^\*\*([^*]+)\*\*/);
+    if (bold) { emitRun(i + 2, i + 2 + bold[1].length); i += bold[0].length; continue; }
+    const italic = rest.match(/^\*([^*]+)\*/);
+    if (italic) { emitRun(i + 1, i + 1 + italic[1].length); i += italic[0].length; continue; }
+    const ent = decodeEntityAt(raw, i);
+    if (ent) { decoded.push(ent.ch); starts.push(i); ends.push(i + ent.len); i += ent.len; continue; }
+    decoded.push(raw[i]); starts.push(i); ends.push(i + 1); i++;
+  }
+
+  return { decoded: decoded.join(""), starts, ends };
+}
+
+/**
+ * Resolve text captured from the rendered preview (decoded entities, stripped
+ * markdown markers) back to the exact substring in the raw stored content.
+ * Returns null if no raw span decodes to the target text.
+ */
+export function findRawSpan(raw: string, renderedTarget: string): string | null {
+  if (!renderedTarget) return null;
+  if (raw.includes(renderedTarget)) return renderedTarget; // fast path — no entities/markup involved
+  const { decoded, starts, ends } = buildRenderedMap(raw);
+  const idx = decoded.indexOf(renderedTarget);
+  if (idx === -1) return null;
+  const rawStart = starts[idx];
+  const rawEnd = ends[idx + renderedTarget.length - 1];
+  return raw.slice(rawStart, rawEnd);
+}
+
 // ── Block parser ─────────────────────────────────────────────────────────────
 // "raw" tracks the exact original source text for a block — required so an
 // in-place edit can be diffed/replaced precisely against the stored content.
