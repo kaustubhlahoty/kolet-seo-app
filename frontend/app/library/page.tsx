@@ -151,6 +151,7 @@ export default function LibraryPage() {
   const [sendingForProof, setSendingForProof] = useState<string | null>(null);
   const [approving, setApproving]         = useState<string | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [statusChanging, setStatusChanging] = useState<string | null>(null);
 
   function toggleAudit(id: string) {
     setExpandedAudits(prev => {
@@ -284,6 +285,25 @@ export default function LibraryPage() {
       setWorkflowError(e.message);
     } finally {
       setApproving(null);
+    }
+  }
+
+  async function changeStatus(id: string, status: string) {
+    setStatusChanging(id);
+    setWorkflowError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/articles/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setWorkflowError(data.error ?? "Failed to change status"); return; }
+      fetchArticles();
+    } catch (e: any) {
+      setWorkflowError(e.message);
+    } finally {
+      setStatusChanging(null);
     }
   }
 
@@ -675,6 +695,18 @@ export default function LibraryPage() {
                           {expandedAudits.has(article.id) ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                         </button>
                       )}
+                      <select
+                        value={article.status}
+                        onChange={e => changeStatus(article.id, e.target.value)}
+                        disabled={statusChanging === article.id}
+                        title="Manually set status"
+                        className="text-xs border border-stone-300 rounded-lg px-2 py-1.5 text-gray-600 focus:outline-none focus:border-kolet-yellow bg-white disabled:opacity-50"
+                      >
+                        {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
+                          <option key={key} value={key}>{cfg.label}</option>
+                        ))}
+                      </select>
+                      {statusChanging === article.id && <Loader size={12} className="animate-spin text-gray-400" />}
                       {article.status === "draft" && (
                         <button
                           onClick={() => sendForProofreading(article.id)}
