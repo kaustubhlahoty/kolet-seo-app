@@ -141,7 +141,19 @@ complete translated article content
     const translatedSlug    = extract('====SLUG====',  '====SLUG_END====')    ?? (article.slug + '-' + target_lang);
     const translatedKw      = extract('====KW====',    '====KW_END====')      ?? (article.focus_keyword ?? '');
     const translatedMeta    = extract('====META====',  '====META_END====')    ?? (article.meta_description ?? '');
-    const translatedContent = extract('====CONTENT====', '====CONTENT_END====') ?? article.content;
+    const translatedContent = extract('====CONTENT====', '====CONTENT_END====');
+
+    // Content is the core payload — never silently fall back to the untranslated original,
+    // that leaves a "translated" draft sitting around that's secretly just a copy of the source.
+    if (!translatedContent || finalMsg.stop_reason === 'max_tokens') {
+      console.error('[translate] content failed to parse or was truncated, stop_reason=', finalMsg.stop_reason);
+      await sql`DELETE FROM articles WHERE id = ${newId}`.catch(() => {});
+      return NextResponse.json({
+        error: finalMsg.stop_reason === 'max_tokens'
+          ? 'Translation was cut off (article too long) — try again.'
+          : 'Translation failed — Claude returned an unexpected format. Try again.',
+      }, { status: 502 });
+    }
 
     console.log('[translate] parsed. Updating article', newId);
 

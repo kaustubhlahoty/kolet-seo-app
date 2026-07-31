@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { auth } from '@/auth';
 import { placeholdersPreserved } from '@/lib/image-placeholders';
+import { saveRevision } from '@/lib/revisions';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string; suggestionId: string }> }) {
   const { id, suggestionId } = await params;
@@ -34,6 +35,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const session = await auth();
   const resolvedBy = session?.user?.name || session?.user?.email || 'Unknown';
 
+  await saveRevision(id, content, 'suggestion_merge', resolvedBy);
   await sql`UPDATE articles SET content=${updated} WHERE id=${id}`;
   await sql`UPDATE article_suggestions SET status='approved', resolved_at=NOW(), resolved_by=${resolvedBy} WHERE id=${suggestionId}`;
 

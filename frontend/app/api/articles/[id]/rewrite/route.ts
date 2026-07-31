@@ -4,6 +4,7 @@ import { sql } from '@/lib/db';
 import { getSystemPrompt } from '@/lib/prompts';
 import { getKoletKnowledgeBrief } from '@/lib/kolet-knowledge';
 import { buildCtaHref } from '@/lib/cta-href';
+import { saveRevision } from '@/lib/revisions';
 
 export const maxDuration = 300;
 
@@ -108,6 +109,7 @@ Output ONLY the complete rewritten article in CMS format. No preamble, no explan
     const pts: Record<string, number> = { kw_in_title: 15, kw_in_first_100: 12, kw_density_ok: 10, word_count_ok: 10, has_h2: 10, multiple_h2: 8, has_images: 8, has_promo: 7, kw_in_meta: 8, no_bad_opener: 12 };
     const newSeoScore = Object.entries(seoChecks).reduce((sum, [k, pass]) => sum + (pass ? (pts[k] ?? 0) : 0), 0);
 
+    await saveRevision(id, content, 'rewrite');
     await sql`UPDATE articles SET content=${rewrittenContent}, seo_score=${newSeoScore}, audit_report=NULL, status='needs_revision' WHERE id=${id}`;
 
     const origin = new URL(request.url).origin;

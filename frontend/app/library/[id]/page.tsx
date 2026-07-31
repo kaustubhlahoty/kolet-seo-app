@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { API_BASE } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Trash2, X, GitPullRequest, GitMerge } from "lucide-react";
+import { ArrowLeft, Copy, Check, Image as ImageIcon, Link2, Loader, Wand2, Download, Sparkles, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, MessageSquare, CheckCheck, Send, Pencil, Trash2, X, GitPullRequest, GitMerge, History } from "lucide-react";
 import { diffWords } from "@/lib/diff";
 import { placeholdersPreserved } from "@/lib/image-placeholders";
 import type { Comment } from "@/lib/types";
@@ -236,6 +236,25 @@ type Suggestion = {
   resolved_by: string | null;
 };
 
+type Revision = {
+  id: string;
+  article_id: string;
+  content: string;
+  source: string | null;
+  author: string | null;
+  created_at: string;
+};
+
+const REVISION_SOURCE_LABELS: Record<string, string> = {
+  save: "Manual save",
+  rewrite: "AI rewrite (audit fixes)",
+  apply_review: "Applied review fixes",
+  ai_edit: "AI edit (free-text prompt)",
+  suggestion_merge: "Suggestion merged",
+  fix_image_format: "Image format fix (admin tool)",
+  pre_restore: "Snapshot before a restore",
+};
+
 /** GitHub-style split diff: removed words in red on the left, added words in green on the right. */
 function SideBySideDiff({ original, proposed }: { original: string; proposed: string }) {
   const ops = diffWords(original, proposed);
@@ -272,6 +291,13 @@ export default function ArticleDetailPage() {
   const [suggestionError, setSuggestionError] = useState("");
   const [reviewActioning, setReviewActioning] = useState(false);
   const [reviewActionError, setReviewActionError] = useState('');
+
+  const [showHistory, setShowHistory] = useState(false);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [expandedRevisionId, setExpandedRevisionId] = useState<string | null>(null);
 
   const [rawContent, setRawContent]   = useState("");
   const [meta, setMeta]               = useState<any>(null);
@@ -429,6 +455,40 @@ export default function ArticleDetailPage() {
   }, [id]);
 
   useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
+
+  async function openHistory() {
+    setShowHistory(true);
+    setRevisionsLoading(true);
+    setHistoryError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/revisions`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load history');
+      setRevisions(data.revisions || []);
+    } catch (e: any) {
+      setHistoryError(e.message);
+    } finally {
+      setRevisionsLoading(false);
+    }
+  }
+
+  async function restoreRevision(revisionId: string) {
+    if (!window.confirm('Restore this version? The current content will be saved as a new revision first, so this can be undone.')) return;
+    setRestoringId(revisionId);
+    setHistoryError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/articles/${id}/revisions/${revisionId}/restore`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Restore failed');
+      setRawContent(data.content);
+      setContentKey(k => k + 1);
+      setShowHistory(false);
+    } catch (e: any) {
+      setHistoryError(e.message);
+    } finally {
+      setRestoringId(null);
+    }
+  }
 
   async function approveSuggestion(suggestionId: string) {
     setSuggestionActioning(suggestionId);
@@ -775,10 +835,18 @@ export default function ArticleDetailPage() {
   useEffect(() => { serpDescRef.current = serpDesc; }, [serpDesc]);
   useEffect(() => { urlMapRef.current = urlMap; }, [urlMap]);
 
-  // Reset dirty tracking when AI rewrites the content
+  // Reset dirty tracking whenever content changes via a different mechanism (in-place
+  // edit, suggestion merge, AI rewrite, etc). Also cancel any pending autosave and clear
+  // every live*Ref — otherwise a late-firing timer, or a later unrelated save, would
+  // re-splice this now-stale typed snapshot over the newer content.
   useEffect(() => {
     liveContentRef.current = '';
+    liveTitleRef.current = '';
+    liveReadTimeRef.current = '';
+    liveIntroRef.current = '';
+    liveKeyTakeawaysRef.current = '';
     setIsDirty(false);
+    if (autoSaveRef.current) { clearTimeout(autoSaveRef.current); autoSaveRef.current = null; }
   }, [contentKey]);
 
   // ── Splice a new body into rawContent while preserving CMS header + SEO footer + FAQ tail ──
@@ -859,6 +927,14 @@ export default function ArticleDetailPage() {
         if (!result.ok) { setSaveError(result.error); return; }
         // Pending admin approval — stored content is untouched until merged.
       }
+
+      // Clear every live*Ref now that this exact snapshot has been persisted (or submitted) —
+      // otherwise it could get blindly re-applied by a later, unrelated save call.
+      liveContentRef.current = '';
+      liveTitleRef.current = '';
+      liveReadTimeRef.current = '';
+      liveIntroRef.current = '';
+      liveKeyTakeawaysRef.current = '';
 
       setIsDirty(false);
       setLastSavedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
@@ -1151,6 +1227,12 @@ export default function ArticleDetailPage() {
         <div className="ml-auto flex items-center gap-2.5">
           {isAdmin ? (
             <>
+              <button
+                onClick={openHistory}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-stone-300 hover:border-stone-400 text-gray-500 hover:text-gray-700 text-xs font-semibold rounded-lg transition-colors"
+              >
+                <History size={11} /> History
+              </button>
               {saveError && <span className="text-xs text-red-400">{saveError}</span>}
               {isSaving && (
                 <span className="text-xs text-gray-400 flex items-center gap-1">
@@ -2202,6 +2284,81 @@ export default function ArticleDetailPage() {
           )}
         </div>
       </div>
+
+      {/* ── Version History ── */}
+      {showHistory && (
+        <div className="fixed inset-0 z-50 flex items-stretch bg-black/80 backdrop-blur-sm" onClick={() => setShowHistory(false)}>
+          <div
+            className="relative ml-auto w-full max-w-2xl bg-white border-l border-stone-200 flex flex-col h-full overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-stone-200 shrink-0">
+              <div className="flex items-center gap-2">
+                <History size={16} className="text-kolet-yellow" />
+                <h2 className="text-sm font-semibold text-gray-900">Version History</h2>
+              </div>
+              <button onClick={() => setShowHistory(false)} className="text-gray-500 hover:text-gray-900 p-1 rounded transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-3">
+              {historyError && (
+                <p className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} /> {historyError}
+                </p>
+              )}
+              {revisionsLoading && (
+                <div className="flex items-center gap-2 text-gray-500 py-8 justify-center">
+                  <Loader size={16} className="animate-spin" /> Loading…
+                </div>
+              )}
+              {!revisionsLoading && revisions.length === 0 && !historyError && (
+                <p className="text-sm text-gray-400 text-center py-8">No previous versions yet — one gets saved every time content changes.</p>
+              )}
+              {revisions.map(rev => {
+                const expanded = expandedRevisionId === rev.id;
+                return (
+                  <div key={rev.id} className="border border-stone-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="text-xs text-gray-500">
+                        <span className="font-semibold text-gray-900">
+                          {REVISION_SOURCE_LABELS[rev.source ?? ''] ?? rev.source ?? 'Change'}
+                        </span>
+                        {' · '}
+                        {new Date(rev.created_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        {rev.author && <> · {rev.author}</>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setExpandedRevisionId(expanded ? null : rev.id)}
+                          className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-stone-100 transition-colors"
+                        >
+                          {expanded ? 'Hide diff' : 'Preview diff'}
+                        </button>
+                        <button
+                          onClick={() => restoreRevision(rev.id)}
+                          disabled={restoringId === rev.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {restoringId === rev.id ? <Loader size={11} className="animate-spin" /> : <History size={11} />}
+                          Restore this version
+                        </button>
+                      </div>
+                    </div>
+                    {expanded && (
+                      <div className="pt-1">
+                        <p className="text-xs text-gray-400 mb-1.5">This version (left) vs. current content (right):</p>
+                        <SideBySideDiff original={rev.content} proposed={rawContent} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

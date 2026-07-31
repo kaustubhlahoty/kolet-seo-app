@@ -33,6 +33,17 @@ async function ensureMigrations() {
       )
     `,
     conn`CREATE INDEX IF NOT EXISTS idx_suggestions_article_status ON article_suggestions(article_id, status)`,
+    conn`
+      CREATE TABLE IF NOT EXISTS article_revisions (
+        id TEXT PRIMARY KEY,
+        article_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT,
+        author TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `,
+    conn`CREATE INDEX IF NOT EXISTS idx_revisions_article ON article_revisions(article_id, created_at DESC)`,
   ]);
 }
 
@@ -118,6 +129,17 @@ export async function initDb() {
       created_at TIMESTAMP DEFAULT NOW(),
       resolved_at TIMESTAMP,
       resolved_by TEXT
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS article_revisions (
+      id TEXT PRIMARY KEY,
+      article_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      source TEXT,
+      author TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
     )
   `;
 

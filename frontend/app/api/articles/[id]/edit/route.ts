@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { sql } from '@/lib/db';
+import { saveRevision } from '@/lib/revisions';
 
 export const maxDuration = 120;
 
@@ -49,6 +50,7 @@ Apply the instruction above and return the complete updated article.`,
     return NextResponse.json({ error: 'Claude returned unexpectedly short content — changes not applied' }, { status: 500 });
   }
 
+  await saveRevision(id, content, 'ai_edit');
   await sql`UPDATE articles SET content = ${updated} WHERE id = ${id}`;
   return NextResponse.json({ content: updated });
 }

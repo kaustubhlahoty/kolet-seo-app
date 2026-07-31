@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
+import { saveRevision } from '@/lib/revisions';
 
 /**
  * POST /api/admin/fix-image-format
@@ -46,6 +47,7 @@ export async function POST() {
 
     if (updated === content) { skipped++; continue; }
 
+    await saveRevision(id, content, 'fix_image_format');
     await sql`UPDATE articles SET content = ${updated} WHERE id = ${id}`;
     fixed++;
     changes.push({ id, before: content.length, after: updated.length });

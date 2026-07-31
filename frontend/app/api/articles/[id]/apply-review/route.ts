@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { sql } from '@/lib/db';
+import { saveRevision } from '@/lib/revisions';
 
 export const maxDuration = 300;
 
@@ -12,7 +13,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const rows = await sql`SELECT content FROM articles WHERE id = ${id}`;
     if (!rows.length) return NextResponse.json({ error: 'Article not found' }, { status: 404 });
 
-    let content = (rows[0] as any).content || '';
+    const originalContent = (rows[0] as any).content || '';
+    let content = originalContent;
 
     for (const rw of voice_rewrites) {
       if (rw.original && rw.suggestion && content.includes(rw.original)) {
@@ -43,6 +45,7 @@ Return the COMPLETE updated article content. No preamble, no explanation.`,
       if (fixed && fixed.length > content.length * 0.5) content = fixed;
     }
 
+    if (content !== originalContent) await saveRevision(id, originalContent, 'apply_review');
     await sql`UPDATE articles SET content = ${content} WHERE id = ${id}`;
 
     return NextResponse.json({ content });
