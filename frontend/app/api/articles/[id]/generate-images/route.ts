@@ -41,20 +41,26 @@ async function getHiggsfieldAuth(): Promise<HFAuth> {
     // Try to refresh
     if (refreshToken) {
       try {
-        const res = await fetch('https://fnf-device-auth.higgsfield.ai/token', {
+        const res = await fetch('https://fnf-device-auth.higgsfield.ai/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_code: refreshToken }), // refresh uses device_code field
+          body: JSON.stringify({ refresh_token: refreshToken }),
         });
         if (res.ok) {
           const data = await res.json();
           if (data.access_token) {
-            await sql`INSERT INTO kv_store (key, value, updated_at) VALUES ('hf_access_token', ${data.access_token}, NOW())
-                      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`;
-            if (data.expires_in) {
-              await sql`INSERT INTO kv_store (key, value, updated_at) VALUES ('hf_token_expiry', ${String(Date.now() + data.expires_in * 1000)}, NOW())
-                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`;
-            }
+            await Promise.all([
+              sql`INSERT INTO kv_store (key, value, updated_at) VALUES ('hf_access_token', ${data.access_token}, NOW())
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+              data.expires_in
+                ? sql`INSERT INTO kv_store (key, value, updated_at) VALUES ('hf_token_expiry', ${String(Date.now() + data.expires_in * 1000)}, NOW())
+                      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`
+                : Promise.resolve(),
+              data.refresh_token
+                ? sql`INSERT INTO kv_store (key, value, updated_at) VALUES ('hf_refresh_token', ${data.refresh_token}, NOW())
+                      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`
+                : Promise.resolve(),
+            ]);
             return { mode: 'session', token: data.access_token };
           }
         }
