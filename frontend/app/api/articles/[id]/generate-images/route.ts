@@ -34,7 +34,10 @@ async function getHiggsfieldAuth(): Promise<HFAuth> {
 
   if (accessToken) {
     const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
-    const expired = expiry > 0 && Date.now() > expiry - 60_000; // refresh 1 min early
+    // No recorded expiry is treated as expired (fail-closed) rather than
+    // valid forever — otherwise a token stored without expires_in never
+    // gets refreshed or falls back to API key credentials.
+    const expired = expiry === 0 || Date.now() > expiry - 60_000; // refresh 1 min early
 
     if (!expired) return { mode: 'session', token: accessToken };
 
