@@ -5,8 +5,10 @@ import { getAdminSetting } from '@/lib/admin-settings';
 
 export const maxDuration = 300;
 
-const HF_PLATFORM = 'https://platform.higgsfield.ai'; // API key auth — separate billing
-const HF_CLOUD    = 'https://fnf.higgsfield.ai';       // Session token auth — Ultra Plan credits
+const HF_PLATFORM    = 'https://platform.higgsfield.ai';     // API key auth — separate billing
+const HF_CLOUD       = 'https://fnf.higgsfield.ai';           // Session token auth — Ultra Plan credits
+const HF_OAUTH_TOKEN = 'https://clerk.higgsfield.ai/oauth/token'; // Clerk OAuth2 token/refresh endpoint
+const HF_OAUTH_CLIENT_ID = 'sRGCQJvvJkPrrtRj'; // Higgsfield CLI's public OAuth client (PKCE, no secret)
 
 // ─── Model routing ───────────────────────────────────────────────────────────
 
@@ -41,13 +43,24 @@ async function getHiggsfieldAuth(): Promise<HFAuth> {
 
     if (!expired) return { mode: 'session', token: accessToken };
 
-    // Try to refresh
+    // Try to refresh — Higgsfield migrated session auth to OAuth2+PKCE via
+    // Clerk; the old fnf-device-auth.higgsfield.ai endpoints no longer issue
+    // usable credentials. This is a standard OAuth2 refresh_token grant.
     if (refreshToken) {
       try {
-        const res = await fetch('https://fnf-device-auth.higgsfield.ai/refresh', {
+        const res = await fetch(HF_OAUTH_TOKEN, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken }),
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            // Clerk's token endpoint bot-filters on User-Agent; Node's fetch
+            // sends none by default, which gets blocked (Cloudflare error 1010).
+            'User-Agent': 'higgsfield-cli/1.2.2',
+          },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+            client_id: HF_OAUTH_CLIENT_ID,
+          }),
         });
         if (res.ok) {
           const data = await res.json();

@@ -5,6 +5,8 @@ import { sql } from '@/lib/db';
 const WRITABLE_KEYS = [
   'higgsfield_api_key_id',
   'higgsfield_secret_key',
+  'hf_access_token',
+  'hf_refresh_token',
 ];
 
 // Keys we report status for (read-only for some)
@@ -60,6 +62,13 @@ export async function POST(request: Request) {
         `;
         updated.push(key);
       }
+    }
+
+    // A manually-imported access token has no client-known expiry — clear any
+    // stale expiry from a previous token so it's treated as expired (and
+    // refreshed) on first use rather than inheriting an unrelated timestamp.
+    if (updated.includes('hf_access_token')) {
+      await sql`DELETE FROM kv_store WHERE key = 'hf_token_expiry'`;
     }
 
     return NextResponse.json({ updated });
