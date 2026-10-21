@@ -65,8 +65,8 @@ async function getHiggsfieldAuth(): Promise<HFAuth> {
           }
         }
       } catch {}
-      // Refresh failed — try current token anyway (might still work)
-      return { mode: 'session', token: accessToken };
+      // Refresh failed — fall through to API key credentials below instead of
+      // retrying a token we already know is expired.
     }
   }
 
