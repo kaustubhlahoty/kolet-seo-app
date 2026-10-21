@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { auth } from '@/auth';
 import { randomUUID } from 'crypto';
-import { notifySuggestionSubmitted } from '@/lib/notify';
 import { placeholdersPreserved } from '@/lib/image-placeholders';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -40,11 +39,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // A proposed edit is real reviewer feedback, same as a comment — flip out of the
   // "awaiting first look" state so the writer knows something needs their attention.
   await sql`UPDATE articles SET status='needs_revision' WHERE id=${id} AND status='needs_proofreading'`.catch(() => {});
-
-  const articleRows = await sql`SELECT title FROM articles WHERE id=${id}`;
-  const title = (articleRows[0] as any)?.title ?? 'Untitled';
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
-  await notifySuggestionSubmitted({ title, author, url: `${appUrl}/library/${id}` }).catch(() => null);
 
   return NextResponse.json({ id: suggestionId, status: 'pending' });
 }
