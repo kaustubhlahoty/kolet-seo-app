@@ -330,6 +330,7 @@ export default function ArticleDetailPage() {
   const [commentAuthor, setCommentAuthor] = useState('');
   const [commentBody, setCommentBody]   = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentsPanelOpen, setCommentsPanelOpen] = useState(true);
   const [showResolvedSuggestions, setShowResolvedSuggestions] = useState(false);
   // Replies
   const [replyingTo, setReplyingTo]     = useState<string | null>(null);
@@ -586,6 +587,11 @@ export default function ArticleDetailPage() {
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [activeThread]);
+
+  function openThread(c: Comment, rect: DOMRect) {
+    setActiveThread(c);
+    setActiveThreadRect(rect);
+  }
 
   function closeActiveThread() {
     setActiveThread(null);
@@ -1283,6 +1289,62 @@ export default function ArticleDetailPage() {
         </div>
       </div>
 
+      {/* All open comments — includes ones whose quoted text no longer exists in the
+          current content (e.g. edited since the comment was made) and so can't render
+          as an inline highlight. Without this list those comments are unreachable. */}
+      {(() => {
+        const openTopLevel = comments.filter(c => !c.resolved && !c.parent_id);
+        if (openTopLevel.length === 0) return null;
+        const fullText = `${sections.intro}\n${sections.keyTakeaways}\n${sections.content}`;
+        return (
+          <div className="mb-4 bg-white border border-stone-200 rounded-xl overflow-hidden">
+            <button
+              onClick={() => setCommentsPanelOpen(v => !v)}
+              className="w-full flex items-center justify-between gap-2 px-4 py-2.5 text-xs font-semibold text-gray-700 hover:bg-stone-50 transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                <MessageSquare size={12} />
+                {openTopLevel.length} open comment{openTopLevel.length === 1 ? '' : 's'}
+              </span>
+              {commentsPanelOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+            {commentsPanelOpen && (
+              <div className="divide-y divide-stone-100 border-t border-stone-100">
+                {openTopLevel.map(c => {
+                  const quote = c.quote?.trim();
+                  const foundInText = !!quote && fullText.includes(quote);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={e => openThread(c, (e.currentTarget as HTMLElement).getBoundingClientRect())}
+                      className="w-full text-left px-4 py-2.5 hover:bg-stone-50 transition-colors flex items-start gap-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-xs font-semibold text-gray-900">{c.author}</span>
+                          <span className="text-xs text-gray-400">
+                            {new Date(c.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+                          </span>
+                          {quote && !foundInText && (
+                            <span className="flex items-center gap-1 text-xs text-amber-600" title="The text this comment was attached to has since changed, so it isn't highlighted above.">
+                              <AlertTriangle size={10} /> not shown in text
+                            </span>
+                          )}
+                        </div>
+                        {quote && (
+                          <p className="text-xs text-gray-400 italic truncate mb-0.5">&ldquo;{quote}&rdquo;</p>
+                        )}
+                        <p className="text-xs text-gray-600 truncate">{c.body}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {imagesGenerating && (
         <div className="flex items-center gap-2 mb-4 px-4 py-2.5 bg-kolet-yellow/10 border border-kolet-yellow/30 rounded-xl text-sm text-gray-700">
           <Loader size={13} className="animate-spin text-kolet-yellow shrink-0" />
@@ -1293,7 +1355,6 @@ export default function ArticleDetailPage() {
       {/* Review Mode — readable prose with inline text selection */}
       {reviewMode && (() => {
         const openQuoted = comments.filter(c => !c.resolved && !c.parent_id);
-        const openThread = (c: Comment, rect: DOMRect) => { setActiveThread(c); setActiveThreadRect(rect); };
         const pendingOriginals = suggestions.filter(s => s.status === 'pending').map(s => s.original_text);
         return (
           <div
