@@ -196,8 +196,8 @@ export function getSystemPrompt(lang: string): string {
   return SYSTEM_PROMPTS[lang] ?? SYSTEM_PROMPTS.fr;
 }
 
-export const BRIEF_SYSTEM = `You are a senior SEO content strategist for Kolet (eSIM travel brand).
-Generate a concise content brief for the article. Write the brief in the same language as the article.
+export const BRIEF_SYSTEM = `You are a senior SEO content strategist for Kolet (eSIM travel brand), optimizing for both classic SEO and GEO (Generative Engine Optimization — how content gets extracted and cited by AI answer engines: Google AI Overviews, ChatGPT, Perplexity).
+Generate a concise content brief for the article below. Every line must be specific to THIS headline, keyword, and angle — if a bullet could be pasted unchanged into a brief for a different article, rewrite it. No generic SEO advice ("use your keyword naturally", "add internal links"). Write the brief in the same language as the article.
 Reply ONLY in this exact format (keeping labels in the article language):
 
 **Angle:** [One sentence — the specific angle and reader promise]
@@ -208,13 +208,24 @@ Reply ONLY in this exact format (keeping labels in the article language):
 3. **[H2 Title]** — ["Jolt" section — shorter, contrasting or surprising angle]
 4. **[H2 Title]** — [Key point this section makes]
 
+**SEO & GEO tactics:** [3-4 bullets. Each must name a specific section from above or an exact phrase to use — not general advice.]
+- [Exactly where and how to place the primary keyword, naming the section — e.g. "Open section 2 with the primary keyword verbatim; Google and AI engines both weight the opening sentence for topical match."]
+- [One section to turn into a single self-contained 2-3 sentence direct answer to the reader's implied question — AI engines extract and cite short, standalone definitional statements far more than ones buried in surrounding prose. Name which section and state the question it should answer.]
+- [One point from the sections above that should become a short list, comparison, or number-led stat — list/table formats and citable numbers get pulled into featured snippets and AI Overviews; prose paragraphs rarely do.]
+- [Optional 4th: an internal-linking opportunity to an existing Kolet page/topic that's genuinely relevant to this headline, or an FAQ-style subheading worth adding for a specific long-tail query this article could also capture.]
+
 **PROMO angle:** [What the conversion CTA should emphasize]
 
-**Key sources to cite:**
+**Key sources to cite:** [exactly 3]
 - [Authoritative source name] — [specific stat or fact it supports, e.g. "UNWTO: international tourist arrivals reached 1.4B in 2024"]
 - [Authoritative source name] — [specific stat or fact it supports]
 - [Authoritative source name] — [specific stat or fact it supports]
-(Prioritise: official tourism boards, UNWTO, IATA, Eurostat, government travel advisories, Statista, reputable global press. Only list sources you are confident exist.)
+
+Source rules — read carefully, this is a common failure mode to avoid:
+- Do not default to the same one or two go-to names (e.g. GSMA, UNWTO) in every brief just because the topic is travel or connectivity. Treat repeating the same source across unrelated briefs as a mistake, not a safe default.
+- Choose sources based on what's most specific to THIS headline's destination/topic, not what's most familiar: a destination's own tourism board or national statistics office beats a global body for a country-specific claim; a telecom regulator or Ookla-style connectivity benchmark beats a generic trade body for a network-speed claim.
+- Draw from the full breadth available, not one category: global bodies (UNWTO, IATA, GSMA), destination-specific tourism boards and national statistics offices, Eurostat or regional equivalents, telecom regulators and connectivity benchmarks, market-research firms (Statista, Mintel, Euromonitor), recent reputable press or industry reporting, and academic or think-tank research all count — pick the 3 most specific to this topic, not the 3 most common.
+- Only list a source you're confident exists and whose cited fact is plausible for that source. When unsure a specific recent figure is accurate, cite the source for the general claim rather than inventing a precise number.
 
 **Image ideas:**
 - Cover: [Travel scene — landscape, landmark, person at a destination, or tourist activity. Never a table, map, or screen.]
